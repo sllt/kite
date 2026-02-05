@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  kite-http-server:
+    build:
+      context: ../../../           # project root (so go.mod and go.sum are included)
+      dockerfile: examples/http-server/Dockerfile
+    environment:
+      TRACE_EXPORTER: kite
+      TRACER_RATIO: 0.1
+      REDIS_HOST: redisdb
+      REDIS_PORT: 2002
+      DB_HOST: mysqldb
+      DB_USER: root
+      DB_PASSWORD: password
+      DB_NAME: test
+      DB_PORT: 2001
+      DB_DIALECT: mysql
+    ports:
+      - "9000:9000"
+      - "2121:2121"
+    depends_on:
+      - redisdb
+      - mysqldb
+      - grafana
+      - prometheus
+    networks:
+      - kite-network
+
+  redisdb:
+    image: redis:7.0.5
+    ports:
+      - "2002:6379"
+    networks:
+      - kite-network
+
+  mysqldb:
+    image: mysql:8.0.30
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: test
+    ports:
+      - "2001:3306"
+    networks:
+      - kite-network
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: password
+    volumes:
+      - ./provisioning:/etc/grafana/provisioning
+    networks:
+      - kite-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus:/etc/prometheus
+    networks:
+      - kite-network
+
+networks:
+  kite-network:

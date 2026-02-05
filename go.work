@@ -1,0 +1,31 @@
+go 1.25.0
+
+use (
+	.
+	./examples/using-add-filestore
+	./pkg/kite/datasource/arangodb
+	./pkg/kite/datasource/cassandra
+	./pkg/kite/datasource/clickhouse
+	./pkg/kite/datasource/couchbase
+	./pkg/kite/datasource/dbresolver
+	./pkg/kite/datasource/dgraph
+	./pkg/kite/datasource/elasticsearch
+	./pkg/kite/datasource/file/azure
+	./pkg/kite/datasource/file/ftp
+	./pkg/kite/datasource/file/gcs
+	./pkg/kite/datasource/file/s3
+	./pkg/kite/datasource/file/sftp
+	./pkg/kite/datasource/influxdb
+	./pkg/kite/datasource/kv-store/badger
+	./pkg/kite/datasource/kv-store/dynamodb
+	./pkg/kite/datasource/kv-store/nats
+	./pkg/kite/datasource/mongo
+	./pkg/kite/datasource/opentsdb
+	./pkg/kite/datasource/oracle
+	./pkg/kite/datasource/pubsub/eventhub
+	./pkg/kite/datasource/pubsub/nats
+	./pkg/kite/datasource/pubsub/sqs
+	./pkg/kite/datasource/scylladb
+	./pkg/kite/datasource/solr
+	./pkg/kite/datasource/surrealdb
+)

@@ -1,0 +1,380 @@
+package main
+
+// This test file demonstrates how to test handlers in Kite.
+//
+// Key Concepts:
+// 1. Kite wraps http.Request using kiteHTTP.NewRequest(req)
+// 2. Handlers receive kite.Context which contains the wrapped request
+// 3. Use mux.SetURLVars() to set path parameters for ctx.PathParam()
+// 4. Each HTTP service registered with WithMockHTTPService gets its own separate mock instance
+// 5. Expectations set on one service do NOT affect other services
+// 6. Always use mocks.HTTPServices["serviceName"] when you have multiple services
+//
+// For detailed documentation, see:
+// - https://github.com/sllt/kite/docs/references/testing (Official Kite Testing Guide)
+// - https://github.com/sllt/kite/docs/references/context (Kite Context Documentation)
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/go-redis/redismock/v9"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
+
+	"github.com/sllt/kite/pkg/kite"
+	"github.com/sllt/kite/pkg/kite/config"
+	"github.com/sllt/kite/pkg/kite/infra"
+	"github.com/sllt/kite/pkg/kite/datasource/redis"
+	kiteHTTP "github.com/sllt/kite/pkg/kite/http"
+	"github.com/sllt/kite/pkg/kite/logging"
+	"github.com/sllt/kite/pkg/kite/testutil"
+)
+
+func TestMain(m *testing.M) {
+	os.Setenv("KITE_TELEMETRY", "false")
+	m.Run()
+}
+
+func TestIntegration_SimpleAPIServer(t *testing.T) {
+	httpPort := testutil.GetFreePort(t)
+	port := testutil.GetFreePort(t)
+
+	t.Setenv("HTTP_PORT", strconv.Itoa(httpPort))
+	t.Setenv("METRICS_PORT", strconv.Itoa(port))
+
+	host := fmt.Sprintf("http://localhost:%d", httpPort)
+
+	go main()
+	time.Sleep(100 * time.Millisecond) // Giving some time to start the server
+
+	tests := []struct {
+		desc string
+		path string
+		body any
+	}{
+		{"hello handler", "/hello", "Hello World!"},
+		{"hello handler with query parameter", "/hello?name=kite", "Hello kite!"},
+		{"redis handler", "/redis", ""},
+		{"mysql handler", "/mysql", float64(4)},
+	}
+
+	for i, tc := range tests {
+		req, _ := http.NewRequest(http.MethodGet, host+tc.path, nil)
+		req.Header.Set("content-type", "application/json")
+
+		c := http.Client{}
+		resp, err := c.Do(req)
+
+		var data = struct {
+			Data any `json:"data"`
+		}{}
+
+		b, err := io.ReadAll(resp.Body)
+
+		require.NoError(t, err, "TEST[%d], Failed.\n%s", i, tc.desc)
+
+		_ = json.Unmarshal(b, &data)
+
+		assert.Equal(t, tc.body, data.Data, "TEST[%d], Failed.\n%s", i, tc.desc)
+
+		require.NoError(t, err, "TEST[%d], Failed.\n%s", i, tc.desc)
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "TEST[%d], Failed.\n%s", i, tc.desc)
+
+		resp.Body.Close()
+	}
+}
+
+func TestIntegration_SimpleAPIServer_Errors(t *testing.T) {
+	httpPort := testutil.GetFreePort(t)
+	port := testutil.GetFreePort(t)
+
+	t.Setenv("HTTP_PORT", strconv.Itoa(httpPort))
+	t.Setenv("METRICS_PORT", strconv.Itoa(port))
+
+	host := fmt.Sprintf("http://localhost:%d", httpPort)
+
+	go main()
+	time.Sleep(100 * time.Millisecond) // Giving some time to start the server
+
+	tests := []struct {
+		desc       string
+		path       string
+		body       any
+		statusCode int
+	}{
+		{
+			desc:       "error handler called",
+			path:       "/error",
+			statusCode: http.StatusInternalServerError,
+			body:       map[string]any{"message": "some error occurred"},
+		},
+		{
+			desc:       "empty route",
+			path:       "/",
+			statusCode: http.StatusNotFound,
+			body:       map[string]any{"message": "route not registered"},
+		},
+		{
+			desc:       "route not registered with the server",
+			path:       "/route",
+			statusCode: http.StatusNotFound,
+			body:       map[string]any{"message": "route not registered"},
+		},
+	}
+
+	for i, tc := range tests {
+		req, _ := http.NewRequest(http.MethodGet, host+tc.path, nil)
+		req.Header.Set("content-type", "application/json")
+
+		c := http.Client{}
+		resp, err := c.Do(req)
+
+		var data = struct {
+			Error any `json:"error"`
+		}{}
+
+		b, err := io.ReadAll(resp.Body)
+
+		require.NoError(t, err, "TEST[%d], Failed.\n%s", i, tc.desc)
+
+		_ = json.Unmarshal(b, &data)
+
+		assert.Equal(t, tc.body, data.Error, "TEST[%d], Failed.\n%s", i, tc.desc)
+
+		require.NoError(t, err, "TEST[%d], Failed.\n%s", i, tc.desc)
+
+		assert.Equal(t, tc.statusCode, resp.StatusCode, "TEST[%d], Failed.\n%s", i, tc.desc)
+
+		resp.Body.Close()
+	}
+}
+
+func TestIntegration_SimpleAPIServer_Health(t *testing.T) {
+	httpPort := testutil.GetFreePort(t)
+	port := testutil.GetFreePort(t)
+
+	t.Setenv("HTTP_PORT", strconv.Itoa(httpPort))
+	t.Setenv("METRICS_PORT", strconv.Itoa(port))
+
+	host := fmt.Sprintf("http://localhost:%d", httpPort)
+
+	go main()
+	time.Sleep(100 * time.Millisecond) // Giving some time to start the server
+
+	tests := []struct {
+		desc       string
+		path       string
+		statusCode int
+	}{
+		{"health handler", "/.well-known/health", http.StatusOK}, // Health check should be added by the framework.
+		{"favicon handler", "/favicon.ico", http.StatusOK},       // Favicon should be added by the framework.
+	}
+
+	for i, tc := range tests {
+		req, _ := http.NewRequest(http.MethodGet, host+tc.path, nil)
+		req.Header.Set("content-type", "application/json")
+
+		c := http.Client{}
+		resp, err := c.Do(req)
+
+		require.NoError(t, err, "TEST[%d], Failed.\n%s", i, tc.desc)
+
+		assert.Equal(t, tc.statusCode, resp.StatusCode, "TEST[%d], Failed.\n%s", i, tc.desc)
+	}
+}
+
+func TestRedisHandler(t *testing.T) {
+	metricsPort := testutil.GetFreePort(t)
+	httpPort := testutil.GetFreePort(t)
+
+	t.Setenv("METRICS_PORT", strconv.Itoa(metricsPort))
+	t.Setenv("HTTP_PORT", strconv.Itoa(httpPort))
+
+	a := kite.New()
+	logger := logging.NewLogger(logging.DEBUG)
+	redisClient, mock := redismock.NewClientMock()
+
+	rc := redis.NewClient(config.NewMockConfig(map[string]string{"REDIS_HOST": "localhost", "REDIS_PORT": "2001"}), logger, a.Metrics())
+	rc.Client = redisClient
+
+	mock.ExpectGet("test").SetErr(testutil.CustomError{ErrorMessage: "redis get error"})
+
+	ctx := &kite.Context{Context: context.Background(),
+		Request: nil, Container: &infra.Container{Logger: logger, Redis: rc}}
+
+	resp, err := RedisHandler(ctx)
+
+	assert.Nil(t, resp)
+	require.Error(t, err)
+}
+
+// MockRequest implements the Request interface for testing
+type MockRequest struct {
+	*http.Request
+	params map[string]string
+}
+
+func (m *MockRequest) HostName() string {
+	if m.Request != nil {
+		return m.Request.Host
+	}
+
+	return ""
+}
+
+func (m *MockRequest) Params(s string) []string {
+	if m.Request != nil {
+		return m.Request.URL.Query()[s]
+	}
+
+	return nil
+}
+
+func NewMockRequest(req *http.Request) *MockRequest {
+	// Parse query parameters
+	queryParams := make(map[string]string)
+	for k, v := range req.URL.Query() {
+		if len(v) > 0 {
+			queryParams[k] = v[0]
+		}
+	}
+
+	return &MockRequest{
+		Request: req,
+		params:  queryParams,
+	}
+}
+
+// Param returns URL query parameters
+func (m *MockRequest) Param(key string) string {
+	return m.params[key]
+}
+
+// PathParam returns URL path parameters
+func (m *MockRequest) PathParam(key string) string {
+	return ""
+}
+
+// Bind implements the Bind method required by the Request interface
+func (m *MockRequest) Bind(i any) error {
+	return nil
+}
+
+// createTestContext sets up a Kite context for unit tests with a given URL and optional mock container.
+// This demonstrates how Kite wraps http.Request into kite.Request.
+//
+// Note: For path parameters, use mux.SetURLVars() before calling this function.
+// See TestHandler_WithPathParams example for usage with path parameters.
+func createTestContext(method, url string, mockContainer *infra.Container) *kite.Context {
+	// Create standard HTTP request
+	req := httptest.NewRequest(method, url, nil)
+	req.Header.Set("Content-Type", "application/json")
+
+	// Wrap with Kite's Request wrapper (this is how Kite wraps requests)
+	kiteReq := kiteHTTP.NewRequest(req)
+
+	var c *infra.Container
+	if mockContainer != nil {
+		c = mockContainer
+	} else {
+		c = &infra.Container{Logger: logging.NewLogger(logging.DEBUG)}
+	}
+
+	logger := c.Logger
+
+	return &kite.Context{
+		Context:       req.Context(),
+		Request:       kiteReq,
+		Container:     c,
+		ContextLogger: *logging.NewContextLogger(req.Context(), logger),
+	}
+}
+
+func TestHelloHandler(t *testing.T) {
+	// With name parameter
+	ctx := createTestContext(http.MethodGet, "/hello?name=test", nil)
+	resp, err := HelloHandler(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, "Hello test!", resp)
+
+	// Without name parameter
+	ctx = createTestContext(http.MethodGet, "/hello", nil)
+	resp, err = HelloHandler(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, "Hello World!", resp)
+}
+
+func TestErrorHandler(t *testing.T) {
+	ctx := createTestContext(http.MethodGet, "/error", nil)
+
+	resp, err := ErrorHandler(ctx)
+	assert.Nil(t, resp)
+	assert.Error(t, err)
+	assert.Equal(t, "some error occurred", err.Error())
+}
+
+func TestMysqlHandler(t *testing.T) {
+	mockContainer, mocks := infra.NewMockContainer(t)
+
+	// Setup SQL mock to return 4
+	mocks.SQL.ExpectQuery("select 2+2").
+		WillReturnRows(mocks.SQL.NewRows([]string{"value"}).AddRow(4))
+
+	ctx := createTestContext(http.MethodGet, "/mysql", mockContainer)
+
+	resp, err := MysqlHandler(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, 4, resp)
+}
+
+func TestTraceHandler(t *testing.T) {
+	// Register HTTP service - each service gets its own separate mock instance
+	mockContainer, mocks := infra.NewMockContainer(t, infra.WithMockHTTPService("anotherService"))
+
+	// Redis expectations
+	mocks.Redis.EXPECT().Ping(gomock.Any()).Return(nil).Times(5)
+
+	// Create the test context FIRST
+	ctx := createTestContext(http.MethodGet, "/trace", mockContainer)
+
+	// TraceHandler calls Trace() twice, which modifies ctx.Context each time:
+	// 1. defer c.Trace("traceHandler").End() - modifies ctx.Context
+	// 2. span2 := c.Trace("some-sample-work") - modifies ctx.Context again
+	// We need to simulate this exact sequence to get the actual context that will be used
+	defer ctx.Trace("traceHandler").End()  // First Trace() call (same as TraceHandler)
+	span2 := ctx.Trace("some-sample-work") // Second Trace() call (same as TraceHandler)
+	defer span2.End()
+
+	// HTTP service mock - use mocks.HTTPServices["serviceName"] to access the specific service
+	// Important: Use the map keyed by service name, not mocks.HTTPService (singular)
+	mockResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(`{"data":"mock data"}`)),
+	}
+
+	// Now ctx.Context has been modified by both Trace() calls, matching what TraceHandler does
+	// TraceHandler calls: c.GetHTTPService("anotherService").Get(c, "redis", nil)
+	// When passing 'c' (*kite.Context) to Get(), Go uses the embedded context.Context
+	// which is now the modified context after both Trace() calls
+	mocks.HTTPServices["anotherService"].EXPECT().Get(
+		ctx.Context, // Use the context after both Trace() calls (use gomock.Any to avoid this!)
+		"redis",
+		nil, // queryParams is nil in TraceHandler
+	).Return(mockResp, nil)
+
+	resp, err := TraceHandler(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, "mock data", resp)
+}

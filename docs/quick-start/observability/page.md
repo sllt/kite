@@ -1,0 +1,335 @@
+# Observability
+
+Kite, by default, manages observability in different ways once the server starts:
+
+## Logs
+
+Logs offer real-time information, providing valuable insights and immediate visibility into the ongoing state and activities of the system.
+It helps in identifying errors, debugging and troubleshooting, monitor performance, analyzing application usage, communications etc.
+
+Kite logger allows customizing the log level, which provides flexibility to adjust logs based on specific needs.
+
+Logs are generated only for events equal to or above the specified log level; by default, Kite logs at _INFO_ level.
+Log Level can be changed by setting the environment variable `LOG_LEVEL` value to _WARN,DEBUG,ERROR,NOTICE or FATAL_.
+
+When the Kite server runs, it prints a log for reading configs, database connection, requests, database queries, missing configs, etc.
+They contain information such as request's correlation ID, status codes, request time, etc.
+
+{% figure src="/quick-start-logs.png" alt="Pretty Printed Logs" /%}
+
+Logs are well-structured, they are of type JSON when exported to a file, such that they can be pushed to logging systems such as {% new-tab-link title="Loki" href="https://grafana.com/oss/loki/" /%}, Elasticsearch, etc.
+
+## Metrics
+
+Metrics enable performance monitoring by providing insights into response times, latency, throughput, resource utilization, tracking CPU, memory, and disk I/O consumption across services, facilitating capacity planning and scalability efforts.
+
+Metrics play a pivotal role in fault detection and troubleshooting, offering visibility into system behavior.
+
+They are instrumental in measuring and meeting service-level agreements (SLAs) to ensure expected performance and reliability.
+
+Kite publishes metrics to port: _2121_ on _/metrics_ endpoint in Prometheus format.
+
+### Default Metrics
+
+{% table %}
+
+- Name
+- Type
+- Description
+
+---
+
+- app_go_numGC
+- gauge
+- Number of completed Garbage Collector cycles
+
+---
+
+- app_go_routines
+- gauge
+- Number of Go routines running
+
+---
+
+- app_go_sys
+- gauge
+- Number of total bytes of memory
+
+---
+
+- app_sys_memory_alloc
+- gauge
+- Number of bytes allocated for heap objects
+
+---
+
+- app_sys_total_alloc
+- gauge
+- Number of cumulative bytes allocated for heap objects
+
+---
+
+- app_info
+- gauge
+- Number of instances running with info of app and framework
+
+---
+
+- app_http_response
+- histogram
+- Response time of HTTP requests in seconds
+
+---
+
+- app_http_service_response
+- histogram
+- Response time of HTTP service requests in seconds
+
+
+---
+
+- app_sql_open_connections
+- gauge
+- Number of open SQL connections
+
+---
+
+- app_sql_inUse_connections
+- gauge
+- Number of inUse SQL connections
+
+---
+
+- app_sql_stats
+- histogram
+- Response time of SQL queries in milliseconds
+
+---
+
+- app_redis_stats
+- histogram
+- Response time of Redis commands in milliseconds
+
+---
+
+- app_pubsub_publish_total_count
+- counter
+- Number of total publish operations
+
+---
+
+- app_pubsub_publish_success_count
+- counter
+- Number of successful publish operations
+
+---
+
+- app_pubsub_subscribe_total_count
+- counter
+- Number of total subscribe operations
+
+---
+
+- app_pubsub_subscribe_success_count
+- counter
+- Number of successful subscribe operations
+
+---
+
+- app_http_retry_count
+- counter
+- Total number of retry events
+
+---
+
+- app_http_circuit_breaker_state
+- gauge
+- Current state of the circuit breaker (0 for Closed, 1 for Open). Used for historical timeline visualization.
+
+{% /table %}
+
+For example: When running the application locally, we can access the /metrics endpoint on port 2121 from: {% new-tab-link title="http://localhost:2121/metrics" href="http://localhost:2121/metrics" /%}
+
+Kite also supports creating {% new-tab-link newtab=false title="custom metrics" href="/docs/advanced-guide/publishing-custom-metrics" /%}.
+
+### Disabling the Metrics Server
+
+To disable the metrics server entirely, set the `METRICS_PORT` environment variable to `0`:
+
+```dotenv
+METRICS_PORT=0
+```
+
+### Example Dashboard
+
+These metrics can be easily consumed by monitoring systems like {% new-tab-link title="Prometheus" href="https://prometheus.io/" /%}
+and visualized in dashboards using tools like {% new-tab-link title="Grafana" href="https://grafana.com/" /%}.
+
+You can find the dashboard source in the {% new-tab-link title="Kite repository" href="https://github.com/kite-dev/kite/tree/main/examples/http-server/docker/provisioning/dashboards/kite-dashboard" /%}.
+
+{% figure src="/metrics-dashboard.png" alt="Grafana Dashboard showing Kite metrics including HTTP request rates,
+response times, etc." caption="Example monitoring dashboard using Kite's built-in metrics" /%}
+
+
+## Tracing
+
+{% new-tab-link title="Tracing" href="https://opentelemetry.io/docs/concepts/signals/#traces" /%} is a powerful tool for gaining insights into your application's behavior, identifying bottlenecks, and improving
+system performance. A trace is a tree of spans. It is a collective of observable signals showing the path of work
+through a system. A trace on its own is distinguishable by a `TraceID`.
+
+In complex distributed systems, understanding how requests flow through the system is crucial for troubleshooting performance
+issues and identifying bottlenecks. Traditional logging approaches often fall short, providing limited visibility into
+the intricate interactions between components.
+
+
+
+### Automated Tracing in Kite
+
+Kite automatically exports traces for all requests and responses. Kite uses
+{% new-tab-link title="OpenTelemetry" href="https://opentelemetry.io/docs/concepts/what-is-opentelemetry/" /%} , a popular tracing framework, to
+automatically add traces to all requests and responses.
+
+**Automatic Correlation ID Propagation:**
+
+When a request enters your Kite application, Kite automatically generates a correlation-ID `X-Correlation-ID` and adds it
+to the response headers. This correlation ID is then propagated to all downstream requests. This means that user can track
+a request as it travels through your distributed system by simply looking at the correlation ID in the request headers.
+
+### Configuration & Usage:
+
+Kite has support for following trace-exporters:
+#### 1. [Zipkin](https://zipkin.io/):
+
+To see the traces install zipkin image using the following Docker command:
+
+```bash
+docker run --name kite-zipkin -p 2005:9411 -d openzipkin/zipkin:latest
+```
+
+Add Tracer configs in `.env` file, your .env will be updated to
+
+```dotenv
+APP_NAME=test-service
+HTTP_PORT=9000
+
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+DB_HOST=localhost
+DB_USER=root
+DB_PASSWORD=root123
+DB_NAME=test_db
+DB_PORT=3306
+
+# tracing configs
+TRACE_EXPORTER=zipkin
+TRACER_URL=http://localhost:2005/api/v2/spans
+TRACER_RATIO=0.1
+
+LOG_LEVEL=DEBUG
+```
+
+> [!NOTE]
+> If the value of `TRACER_PORT` is not provided, Kite uses port `9411` by default.
+
+Open {% new-tab-link title="zipkin" href="http://localhost:2005/zipkin/" /%} and search by TraceID (correlationID) to see the trace.
+{% figure src="/quick-start-trace.png" alt="Zipkin traces" /%}
+
+#### 2. [Jaeger](https://www.jaegertracing.io/):
+
+To see the traces, install Jaeger image using the following Docker command:
+
+```bash
+docker run -d --name jaeger \
+	-e COLLECTOR_OTLP_ENABLED=true \
+	-p 16686:16686 \
+	-p 14317:4317 \
+	-p 14318:4318 \
+	jaegertracing/all-in-one:1.41
+```
+
+Add Jaeger Tracer configs in `.env` file, your .env will be updated to
+```dotenv
+# ... no change in other env variables
+
+# tracing configs
+TRACE_EXPORTER=jaeger
+TRACER_URL=localhost:14317
+TRACER_RATIO=0.1
+```
+
+Open {% new-tab-link title="jaeger" href="http://localhost:16686/trace/" /%} and search by TraceID (correlationID) to see the trace.
+{% figure src="/jaeger-traces.png" alt="Jaeger traces" /%}
+
+#### 3. [OpenTelemetry Protocol](https://opentelemetry.io/docs/specs/otlp/):
+
+The OpenTelemetry Protocol (OTLP)  underlying gRPC is one of general-purpose telemetry data delivery protocol designed in the scope of the OpenTelemetry project.
+
+Add OTLP configs in `.env` file, your .env will be updated to
+```dotenv
+# ... no change in other env variables
+
+# tracing configs 
+TRACE_EXPORTER=otlp
+TRACER_URL=localhost:4317
+TRACER_RATIO=0.1
+```
+
+
+
+#### 4. [Kite Tracer](https://tracer.github.com/sllt/kite/):
+
+Kite tracer is Kite's own custom trace exporter as well as collector. Users can search a trace by its TraceID (correlationID)
+in Kite's own tracer service, available anywhere, anytime.
+
+Add Kite Tracer configs in `.env` file, your .env will be updated to
+```dotenv
+# ... no change in other env variables
+
+# tracing configs
+TRACE_EXPORTER=kite
+TRACER_RATIO=0.1
+```
+
+> [!NOTE]
+> `TRACER_RATIO` refers to the proportion of traces that are exported through sampling. It ranges between 0 and 1. By default, this ratio is set to 1, meaning all traces are exported.
+>
+> Open {% new-tab-link title="kite-tracer" href="https://tracer.github.com/sllt/kite/" /%} and search by TraceID (correlationID) to see the trace.
+
+
+### Custom Authentication Headers
+
+Many observability platforms require custom headers for authentication. Kite supports this through the `TRACER_HEADERS` configuration, which accepts comma-separated `key=value` pairs following the OpenTelemetry standard format.
+
+#### Usage Examples
+
+**Single Header:**
+```dotenv
+# Honeycomb
+TRACER_HEADERS="X-Honeycomb-Team=your_api_key"
+```
+
+**Multiple Headers:**
+```dotenv
+# Grafana Cloud with multiple headers
+TRACER_HEADERS="Authorization=Basic base64encodedcreds,X-Scope-OrgID=tenant-1"
+```
+
+```dotenv
+# API key with special characters
+TRACER_HEADERS="X-Api-Key=secret123,Authorization=Bearer token"
+```
+
+####  Configuration Example
+
+Here's an example for sending traces to Grafana Cloud with authentication:
+
+```dotenv
+APP_NAME=my-service
+
+# Grafana Cloud OTLP endpoint with authentication
+TRACE_EXPORTER=otlp
+TRACER_URL=otlp-gateway-prod-us-east-0.grafana.net:443
+TRACER_HEADERS="Authorization=Basic dXNlcm5hbWU6cGFzc3dvcmQ=,X-Scope-OrgID=123456"
+TRACER_RATIO=1.0
+```
