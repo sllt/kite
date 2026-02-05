@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/sllt/kite/pkg/kite"
+	"github.com/sllt/kite/pkg/kite/cmd"
 )
 
 const (
@@ -27,7 +28,18 @@ var (
 
 // Create initializes a new Kite project by cloning kite-layout and replacing package names.
 func Create(ctx *kite.Context) (any, error) {
-	projectName := ctx.Param("name")
+	// Support both: kite init myproject  OR  kite init -name=myproject
+	var projectName string
+	if req, ok := ctx.Request.(*cmd.Request); ok {
+		args := req.Args()
+		// For "init myproject", args = ["init", "myproject"]
+		if len(args) > 1 {
+			projectName = args[len(args)-1]
+		}
+	}
+	if projectName == "" {
+		projectName = ctx.Param("name")
+	}
 	if projectName == "" {
 		return nil, ErrNameEmpty
 	}

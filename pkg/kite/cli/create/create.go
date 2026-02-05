@@ -10,6 +10,7 @@ import (
 
 	"github.com/sllt/kite/pkg/kite"
 	"github.com/sllt/kite/pkg/kite/cli/helper"
+	"github.com/sllt/kite/pkg/kite/cmd"
 )
 
 var (
@@ -53,7 +54,17 @@ func Model(ctx *kite.Context) (any, error) {
 
 // All creates handler, service, repository, and model files.
 func All(ctx *kite.Context) (any, error) {
-	name := ctx.Param("name")
+	var name string
+	if req, ok := ctx.Request.(*cmd.Request); ok {
+		args := req.Args()
+		// For "create all hello", args = ["create", "all", "hello"]
+		if len(args) > 2 {
+			name = args[len(args)-1]
+		}
+	}
+	if name == "" {
+		name = ctx.Param("name")
+	}
 	if name == "" {
 		return nil, ErrNameEmpty
 	}
@@ -74,7 +85,19 @@ func All(ctx *kite.Context) (any, error) {
 
 // createComponent creates a component file for the given type.
 func createComponent(ctx *kite.Context, createType string) (any, error) {
-	name := ctx.Param("name")
+	// Support both: kite create handler hello  OR  kite create handler -name=hello
+	var name string
+	if req, ok := ctx.Request.(*cmd.Request); ok {
+		args := req.Args()
+		// For "create handler hello", args = ["create", "handler", "hello"]
+		// We need the last positional argument
+		if len(args) > 2 {
+			name = args[len(args)-1]
+		}
+	}
+	if name == "" {
+		name = ctx.Param("name")
+	}
 	if name == "" {
 		return nil, ErrNameEmpty
 	}

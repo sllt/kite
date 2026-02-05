@@ -14,6 +14,7 @@ import (
 type Request struct {
 	flags  map[string]bool
 	params map[string]string
+	args   []string // positional arguments (non-flag arguments after command)
 }
 
 const trueString = "true"
@@ -26,6 +27,7 @@ func NewRequest(args []string) *Request {
 	r := Request{
 		flags:  make(map[string]bool),
 		params: make(map[string]string),
+		args:   make([]string, 0),
 	}
 
 	const (
@@ -33,12 +35,23 @@ func NewRequest(args []string) *Request {
 		argsLen2 = 2
 	)
 
-	for _, arg := range args {
+	// Track which args are consumed as flag values
+	skipNext := false
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		if arg == "" {
 			continue // This takes cares of cases where command has multiple space in between.
 		}
 
+		if skipNext {
+			skipNext = false
+			continue
+		}
+
+		// Non-flag argument (positional argument)
 		if arg[0] != '-' {
+			r.args = append(r.args, arg)
 			continue
 		}
 
@@ -55,8 +68,14 @@ func NewRequest(args []string) *Request {
 
 		switch values := strings.Split(a, "="); len(values) {
 		case argsLen1:
-			// Support -t -a etc.
-			r.params[values[0]] = trueString
+			// Support -name value (space-separated)
+			if i+1 < len(args) && len(args[i+1]) > 0 && args[i+1][0] != '-' {
+				r.params[values[0]] = args[i+1]
+				skipNext = true // Skip the next argument as it's the value
+			} else {
+				// Support -t -a etc. (flags without values)
+				r.params[values[0]] = trueString
+			}
 		case argsLen2:
 			// Support -a=b
 			r.params[values[0]] = values[1]
@@ -74,6 +93,20 @@ func (r *Request) Param(key string) string {
 // PathParam returns the value of the parameter for key. This is equivalent to Param.
 func (r *Request) PathParam(key string) string {
 	return r.params[key]
+}
+
+// Arg returns the positional argument at the given index (0-based, after command words).
+// Returns empty string if index is out of range.
+func (r *Request) Arg(index int) string {
+	if index < 0 || index >= len(r.args) {
+		return ""
+	}
+	return r.args[index]
+}
+
+// Args returns all positional arguments.
+func (r *Request) Args() []string {
+	return r.args
 }
 
 func (*Request) Context() context.Context {

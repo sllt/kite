@@ -13,7 +13,7 @@ func main() {
 
 	cli.SubCommand("init", bootstrap.Create,
 		kite.AddDescription("Initialize a new Kite project"),
-		kite.AddHelp("Usage: kite init -name=<module-name> [-kite=<version>]"),
+		kite.AddHelp("Usage: kite init <project-name>"),
 	)
 
 	cli.SubCommand("version",
@@ -25,7 +25,7 @@ func main() {
 
 	cli.SubCommand("migrate create", migration.Migrate,
 		kite.AddDescription("Create a new migration file"),
-		kite.AddHelp("Usage: kite migrate create -name=<migration-name>"),
+		kite.AddHelp("Usage: kite migrate create <migration-name>"),
 	)
 
 	cli.SubCommand("wrap grpc server", wrap.BuildGRPCKiteServer,
@@ -41,27 +41,27 @@ func main() {
 	// Create commands for generating layered architecture components
 	cli.SubCommand("create handler", create.Handler,
 		kite.AddDescription("Create a new handler"),
-		kite.AddHelp("Usage: kite create handler -name=<handler-name>"),
+		kite.AddHelp("Usage: kite create handler <name>"),
 	)
 
 	cli.SubCommand("create service", create.Service,
 		kite.AddDescription("Create a new service"),
-		kite.AddHelp("Usage: kite create service -name=<service-name>"),
+		kite.AddHelp("Usage: kite create service <name>"),
 	)
 
 	cli.SubCommand("create repository", create.Repository,
 		kite.AddDescription("Create a new repository"),
-		kite.AddHelp("Usage: kite create repository -name=<repository-name>"),
+		kite.AddHelp("Usage: kite create repository <name>"),
 	)
 
 	cli.SubCommand("create model", create.Model,
 		kite.AddDescription("Create a new model"),
-		kite.AddHelp("Usage: kite create model -name=<model-name>"),
+		kite.AddHelp("Usage: kite create model <name>"),
 	)
 
 	cli.SubCommand("create all", create.All,
 		kite.AddDescription("Create handler, service, repository, and model"),
-		kite.AddHelp("Usage: kite create all -name=<name>"),
+		kite.AddHelp("Usage: kite create all <name>"),
 	)
 
 	cli.Run()

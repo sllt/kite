@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sllt/kite/pkg/kite"
+	"github.com/sllt/kite/pkg/kite/cmd"
 )
 
 const (
@@ -64,7 +65,18 @@ func {{ . }}() migration.Migrate {
 
 // Migrate creates a new timestamped migration file and updates the all.go registry.
 func Migrate(ctx *kite.Context) (any, error) {
-	migName := ctx.Param("name")
+	// Support both: kite migrate create add_users  OR  kite migrate create -name=add_users
+	var migName string
+	if req, ok := ctx.Request.(*cmd.Request); ok {
+		args := req.Args()
+		// For "migrate create add_users", args = ["migrate", "create", "add_users"]
+		if len(args) > 2 {
+			migName = args[len(args)-1]
+		}
+	}
+	if migName == "" {
+		migName = ctx.Param("name")
+	}
 	if migName == "" {
 		return nil, errNameEmpty
 	}
