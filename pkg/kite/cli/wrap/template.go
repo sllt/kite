@@ -14,15 +14,26 @@ const (
     {{- end }}
 {{- end }}
 
+{{- $hasStream := false }}
+{{- range .Methods }}
+    {{- if or .StreamsRequest .StreamsResponse }}
+        {{- $hasStream = true }}
+    {{- end }}
+{{- end }}
+
 package {{ .Package }}
 
 import (
 	"context"
+	{{- if $hasStream }}
 	"time"
+	{{- end }}
 
 	"github.com/sllt/kite/pkg/kite"
 	"github.com/sllt/kite/pkg/kite/infra"
+	{{- if $hasStream }}
 	kiteGRPC "github.com/sllt/kite/pkg/kite/grpc"
+	{{- end }}
 	"google.golang.org/grpc"
 
 	{{- if $hasUnary }}
@@ -58,13 +69,6 @@ type {{ .Service }}ServerWrapper struct {
 	Container *infra.Container
 	server    {{ .Service }}ServerWithKite
 }
-
-{{- $hasStream := false }}
-{{- range .Methods }}
-    {{- if or .StreamsRequest .StreamsResponse }}
-        {{- $hasStream = true }}
-    {{- end }}
-{{- end }}
 
 {{- if $hasStream }}
 // Base instrumented stream
@@ -348,7 +352,7 @@ func (h *{{ $request }}Wrapper) PathParam(s string) string {
 func (h *{{ $request }}Wrapper) Bind(p interface{}) error {
 	ptr := reflect.ValueOf(p)
 	if ptr.Kind() != reflect.Ptr {
-		return fmt.Errorf("expected a pointer, got %%T", p)
+		return fmt.Errorf("expected a pointer, got %T", p)
 	}
 
 	hValue := reflect.ValueOf(h.{{ $request }}).Elem()
@@ -585,7 +589,7 @@ func (h *healthServer) Check(ctx *kite.Context, req *healthpb.HealthCheckRequest
 	res, err := h.Server.Check(ctx.Context, req)
 	logger := kiteGRPC.NewgRPCLogger()
 	logger.DocumentRPCLog(ctx.Context, ctx.Logger, ctx.Metrics(), start, err,
-	fmt.Sprintf("/grpc.health.v1.Health/Check	Service: %%q", req.Service), "app_gRPC-Server_stats")
+	fmt.Sprintf("/grpc.health.v1.Health/Check	Service: %q", req.Service), "app_gRPC-Server_stats")
 	span.End()
 	return res, err
 }
@@ -596,7 +600,7 @@ func (h *healthServer) Watch(ctx *kite.Context, in *healthpb.HealthCheckRequest,
 	err := h.Server.Watch(in, stream)
 	logger := kiteGRPC.NewgRPCLogger()
 	logger.DocumentRPCLog(ctx.Context, ctx.Logger, ctx.Metrics(), start, err,
-	fmt.Sprintf("/grpc.health.v1.Health/Watch	Service: %%q", in.Service), "app_gRPC-Server_stats")
+	fmt.Sprintf("/grpc.health.v1.Health/Watch	Service: %q", in.Service), "app_gRPC-Server_stats")
 	span.End()
 	return err
 }
@@ -607,7 +611,7 @@ func (h *healthServer) SetServingStatus(ctx *kite.Context, service string, servi
 	h.Server.SetServingStatus(service, servingStatus)
 	logger := kiteGRPC.NewgRPCLogger()
 	logger.DocumentRPCLog(ctx.Context, ctx.Logger, ctx.Metrics(), start, nil,
-	fmt.Sprintf("/grpc.health.v1.Health/SetServingStatus	Service: %%q", service), "app_gRPC-Server_stats")
+	fmt.Sprintf("/grpc.health.v1.Health/SetServingStatus	Service: %q", service), "app_gRPC-Server_stats")
 	span.End()
 }
 
@@ -716,7 +720,7 @@ func invokeRPC(ctx *kite.Context, rpcName string, rpcFunc func() (interface{}, e
 
 func (h *HealthClientWrapper) Check(ctx *kite.Context, in *grpc_health_v1.HealthCheckRequest,
 	opts ...grpc.CallOption) (*grpc_health_v1.HealthCheckResponse, error) {
-	result, err := invokeRPC(ctx, fmt.Sprintf("/grpc.health.v1.Health/Check	Service: %%q", in.Service), func() (interface{}, error) {
+	result, err := invokeRPC(ctx, fmt.Sprintf("/grpc.health.v1.Health/Check	Service: %q", in.Service), func() (interface{}, error) {
 		return h.client.Check(ctx, in, opts...)
 	}, "app_gRPC-Client_stats")
 
@@ -728,7 +732,7 @@ func (h *HealthClientWrapper) Check(ctx *kite.Context, in *grpc_health_v1.Health
 
 func (h *HealthClientWrapper) Watch(ctx *kite.Context, in *grpc_health_v1.HealthCheckRequest,
 	opts ...grpc.CallOption) (grpc.ServerStreamingClient[grpc_health_v1.HealthCheckResponse], error) {
-	result, err := invokeRPC(ctx, fmt.Sprintf("/grpc.health.v1.Health/Watch	Service: %%q", in.Service), func() (interface{}, error) {
+	result, err := invokeRPC(ctx, fmt.Sprintf("/grpc.health.v1.Health/Watch	Service: %q", in.Service), func() (interface{}, error) {
 		return h.client.Watch(ctx, in, opts...)
 	}, "app_gRPC-Stream_stats")
 

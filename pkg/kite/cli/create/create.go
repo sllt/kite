@@ -8,13 +8,11 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/sllt/kite/pkg/kite"
 	"github.com/sllt/kite/pkg/kite/cli/helper"
-	"github.com/sllt/kite/pkg/kite/cmd"
 )
 
 var (
-	ErrNameEmpty       = errors.New(`please provide the name using "-name" option`)
+	ErrNameEmpty       = errors.New("please provide a name")
 	ErrInvalidType     = errors.New("invalid create type")
 	ErrNoProjectName   = errors.New("cannot determine project name, ensure go.mod exists")
 	ErrCreateFile      = errors.New("failed to create file")
@@ -33,78 +31,54 @@ type CreateData struct {
 }
 
 // Handler creates a new handler file.
-func Handler(ctx *kite.Context) (any, error) {
-	return createComponent(ctx, "handler")
+func Handler(name string) (string, error) {
+	return CreateComponent(name, "handler")
 }
 
 // Service creates a new service file.
-func Service(ctx *kite.Context) (any, error) {
-	return createComponent(ctx, "service")
+func Service(name string) (string, error) {
+	return CreateComponent(name, "service")
 }
 
 // Repository creates a new repository file.
-func Repository(ctx *kite.Context) (any, error) {
-	return createComponent(ctx, "repository")
+func Repository(name string) (string, error) {
+	return CreateComponent(name, "repository")
 }
 
 // Model creates a new model file.
-func Model(ctx *kite.Context) (any, error) {
-	return createComponent(ctx, "model")
+func Model(name string) (string, error) {
+	return CreateComponent(name, "model")
 }
 
 // All creates handler, service, repository, and model files.
-func All(ctx *kite.Context) (any, error) {
-	var name string
-	if req, ok := ctx.Request.(*cmd.Request); ok {
-		args := req.Args()
-		// For "create all hello", args = ["create", "all", "hello"]
-		if len(args) > 2 {
-			name = args[len(args)-1]
-		}
-	}
+func All(name string) (string, error) {
 	if name == "" {
-		name = ctx.Param("name")
-	}
-	if name == "" {
-		return nil, ErrNameEmpty
+		return "", ErrNameEmpty
 	}
 
 	results := make([]string, 0, 4)
 	types := []string{"handler", "service", "repository", "model"}
 
 	for _, t := range types {
-		result, err := createComponent(ctx, t)
+		result, err := CreateComponent(name, t)
 		if err != nil {
-			return nil, err
+			return "", err
 		}
-		results = append(results, result.(string))
+		results = append(results, result)
 	}
 
 	return strings.Join(results, "\n"), nil
 }
 
-// createComponent creates a component file for the given type.
-func createComponent(ctx *kite.Context, createType string) (any, error) {
-	// Support both: kite create handler hello  OR  kite create handler -name=hello
-	var name string
-	if req, ok := ctx.Request.(*cmd.Request); ok {
-		args := req.Args()
-		// For "create handler hello", args = ["create", "handler", "hello"]
-		// We need the last positional argument
-		if len(args) > 2 {
-			name = args[len(args)-1]
-		}
-	}
+// CreateComponent creates a component file for the given type.
+func CreateComponent(name, createType string) (string, error) {
 	if name == "" {
-		name = ctx.Param("name")
-	}
-	if name == "" {
-		return nil, ErrNameEmpty
+		return "", ErrNameEmpty
 	}
 
 	projectName := helper.GetProjectName(".")
 	if projectName == "" {
-		return nil, ErrNoProjectName
+		return "", ErrNoProjectName
 	}
 
 	// Parse name (may include path like "user/profile")
@@ -126,11 +100,11 @@ func createComponent(ctx *kite.Context, createType string) (any, error) {
 		StructNameSnakeCase:  structNameSnakeCase,
 	}
 
-	return generateFile(ctx, data)
+	return generateFile(data)
 }
 
 // generateFile generates the file for the given CreateData.
-func generateFile(ctx *kite.Context, data *CreateData) (any, error) {
+func generateFile(data *CreateData) (string, error) {
 	// Determine output directory
 	dirPath := data.FilePath
 	if dirPath == "" {
@@ -139,8 +113,7 @@ func generateFile(ctx *kite.Context, data *CreateData) (any, error) {
 
 	// Create directory if not exists
 	if err := os.MkdirAll(dirPath, os.ModePerm); err != nil {
-		ctx.Logger.Errorf("Failed to create directory %s: %v", dirPath, err)
-		return nil, fmt.Errorf("%w: %v", ErrCreateFile, err)
+		return "", fmt.Errorf("%w: %v", ErrCreateFile, err)
 	}
 
 	// Generate file path
@@ -148,36 +121,31 @@ func generateFile(ctx *kite.Context, data *CreateData) (any, error) {
 
 	// Check if file already exists
 	if _, err := os.Stat(outputFile); err == nil {
-		ctx.Logger.Warnf("File %s already exists, skipping", outputFile)
 		return fmt.Sprintf("Skipped: %s (already exists)", outputFile), nil
 	}
 
 	// Create the file
 	f, err := os.Create(outputFile)
 	if err != nil {
-		ctx.Logger.Errorf("Failed to create file %s: %v", outputFile, err)
-		return nil, fmt.Errorf("%w: %v", ErrCreateFile, err)
+		return "", fmt.Errorf("%w: %v", ErrCreateFile, err)
 	}
 	defer f.Close()
 
 	// Get template
 	tmplContent := GetTemplate(data.CreateType)
 	if tmplContent == "" {
-		return nil, ErrInvalidType
+		return "", ErrInvalidType
 	}
 
 	// Parse and execute template
 	tmpl, err := template.New(data.CreateType).Parse(tmplContent)
 	if err != nil {
-		ctx.Logger.Errorf("Failed to parse template: %v", err)
-		return nil, fmt.Errorf("%w: %v", ErrExecuteTemplate, err)
+		return "", fmt.Errorf("%w: %v", ErrExecuteTemplate, err)
 	}
 
 	if err := tmpl.Execute(f, data); err != nil {
-		ctx.Logger.Errorf("Failed to execute template: %v", err)
-		return nil, fmt.Errorf("%w: %v", ErrExecuteTemplate, err)
+		return "", fmt.Errorf("%w: %v", ErrExecuteTemplate, err)
 	}
 
-	ctx.Logger.Infof("Created new %s: %s", data.CreateType, outputFile)
 	return fmt.Sprintf("Created new %s: %s", data.CreateType, outputFile), nil
 }

@@ -9,9 +9,6 @@ import (
 	"strings"
 	"text/template"
 	"time"
-
-	"github.com/sllt/kite/pkg/kite"
-	"github.com/sllt/kite/pkg/kite/cmd"
 )
 
 const (
@@ -21,7 +18,7 @@ const (
 )
 
 var (
-	errNameEmpty    = errors.New(`please provide the name of the migration using "-name" option`)
+	errNameEmpty    = errors.New("please provide the migration name")
 	errScanningFile = errors.New("failed to scan existing all.go file")
 	migRegex        = regexp.MustCompile(`^\s*(\d+)\s*:\s*([a-zA-Z_]+)\(\),?\s*$`)
 )
@@ -64,39 +61,26 @@ func {{ . }}() migration.Migrate {
 )
 
 // Migrate creates a new timestamped migration file and updates the all.go registry.
-func Migrate(ctx *kite.Context) (any, error) {
-	// Support both: kite migrate create add_users  OR  kite migrate create -name=add_users
-	var migName string
-	if req, ok := ctx.Request.(*cmd.Request); ok {
-		args := req.Args()
-		// For "migrate create add_users", args = ["migrate", "create", "add_users"]
-		if len(args) > 2 {
-			migName = args[len(args)-1]
-		}
-	}
+func Migrate(migName string) (string, error) {
 	if migName == "" {
-		migName = ctx.Param("name")
-	}
-	if migName == "" {
-		return nil, errNameEmpty
+		return "", errNameEmpty
 	}
 
-	if err := createMigrationFile(ctx, migName); err != nil {
-		return nil, fmt.Errorf("error while creating migration file, err: %w", err)
+	if err := createMigrationFile(migName); err != nil {
+		return "", fmt.Errorf("error while creating migration file, err: %w", err)
 	}
 
-	if err := createAllMigration(ctx); err != nil {
-		return nil, fmt.Errorf("error while creating all.go file, err: %w", err)
+	if err := createAllMigration(); err != nil {
+		return "", fmt.Errorf("error while creating all.go file, err: %w", err)
 	}
 
 	return fmt.Sprintf("Successfully created migration %v", migName), nil
 }
 
-func createMigrationFile(ctx *kite.Context, migrationName string) error {
+func createMigrationFile(migrationName string) error {
 	if _, err := os.Stat(mig); os.IsNotExist(err) {
-		er := ctx.File.MkdirAll(mig, os.ModePerm)
-		if er != nil {
-			return er
+		if err := os.MkdirAll(mig, os.ModePerm); err != nil {
+			return err
 		}
 	}
 
@@ -108,7 +92,7 @@ func createMigrationFile(ctx *kite.Context, migrationName string) error {
 
 	fileName := currTimeStamp + "_" + migrationName
 
-	file, err := ctx.File.OpenFile(fileName+".go", os.O_CREATE|os.O_WRONLY, os.ModePerm)
+	file, err := os.OpenFile(fileName+".go", os.O_CREATE|os.O_WRONLY, os.ModePerm)
 	if err != nil {
 		return err
 	}
@@ -123,15 +107,15 @@ func createMigrationFile(ctx *kite.Context, migrationName string) error {
 	return nil
 }
 
-func createAllMigration(ctx *kite.Context) error {
+func createAllMigration() error {
 	existing := make(map[string]string)
 
-	existing, err := getAllExistingMigrations(ctx, existing)
+	existing, err := getAllExistingMigrations(existing)
 	if err != nil {
 		return err
 	}
 
-	f, err := ctx.File.Create(allFile)
+	f, err := os.Create(allFile)
 	if err != nil {
 		return err
 	}
@@ -158,9 +142,9 @@ func createAllMigration(ctx *kite.Context) error {
 	return nil
 }
 
-func getAllExistingMigrations(ctx *kite.Context, existing map[string]string) (map[string]string, error) {
+func getAllExistingMigrations(existing map[string]string) (map[string]string, error) {
 	if _, err := os.Stat(allFile); err == nil {
-		file, err := ctx.File.OpenFile(allFile, os.O_RDONLY, os.ModePerm)
+		file, err := os.OpenFile(allFile, os.O_RDONLY, os.ModePerm)
 		if err != nil {
 			return nil, err
 		}

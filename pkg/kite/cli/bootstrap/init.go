@@ -7,9 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-
-	"github.com/sllt/kite/pkg/kite"
-	"github.com/sllt/kite/pkg/kite/cmd"
 )
 
 const (
@@ -18,75 +15,59 @@ const (
 )
 
 var (
-	ErrNameEmpty      = errors.New(`please provide the project name using "-name" option`)
-	ErrCloneFailed    = errors.New("failed to clone kite-layout repository")
-	ErrReplaceFailed  = errors.New("failed to replace package name")
-	ErrModEditFailed  = errors.New("failed to update go.mod module name")
-	ErrModTidyFailed  = errors.New("failed to run go mod tidy")
-	ErrProjectExists  = errors.New("project directory already exists")
+	ErrNameEmpty     = errors.New("please provide the project name")
+	ErrCloneFailed   = errors.New("failed to clone kite-layout repository")
+	ErrReplaceFailed = errors.New("failed to replace package name")
+	ErrModEditFailed = errors.New("failed to update go.mod module name")
+	ErrModTidyFailed = errors.New("failed to run go mod tidy")
+	ErrProjectExists = errors.New("project directory already exists")
 )
 
 // Create initializes a new Kite project by cloning kite-layout and replacing package names.
-func Create(ctx *kite.Context) (any, error) {
-	// Support both: kite init myproject  OR  kite init -name=myproject
-	var projectName string
-	if req, ok := ctx.Request.(*cmd.Request); ok {
-		args := req.Args()
-		// For "init myproject", args = ["init", "myproject"]
-		if len(args) > 1 {
-			projectName = args[len(args)-1]
-		}
-	}
+func Create(projectName string) error {
 	if projectName == "" {
-		projectName = ctx.Param("name")
-	}
-	if projectName == "" {
-		return nil, ErrNameEmpty
+		return ErrNameEmpty
 	}
 
 	// Check if directory already exists
 	if stat, _ := os.Stat(projectName); stat != nil {
-		ctx.Logger.Errorf("Directory %s already exists", projectName)
-		return nil, ErrProjectExists
+		return ErrProjectExists
 	}
 
 	// Step 1: Clone the repository
-	ctx.Logger.Infof("Cloning kite-layout from %s...", repoURL)
+	fmt.Printf("Cloning kite-layout from %s...\n", repoURL)
 	if err := gitClone(projectName); err != nil {
-		ctx.Logger.Errorf("Failed to clone repository: %v", err)
-		return nil, ErrCloneFailed
+		return fmt.Errorf("%w: %v", ErrCloneFailed, err)
 	}
 
 	// Step 2: Replace package names in all .go files
-	ctx.Logger.Infof("Replacing package name to %s...", projectName)
+	fmt.Printf("Replacing package name to %s...\n", projectName)
 	if err := replacePackageName(projectName); err != nil {
-		ctx.Logger.Errorf("Failed to replace package name: %v", err)
-		return nil, ErrReplaceFailed
+		return fmt.Errorf("%w: %v", ErrReplaceFailed, err)
 	}
 
 	// Step 3: Update go.mod module name
-	ctx.Logger.Info("Updating go.mod module name...")
+	fmt.Println("Updating go.mod module name...")
 	if err := updateGoMod(projectName); err != nil {
-		ctx.Logger.Errorf("Failed to update go.mod: %v", err)
-		return nil, ErrModEditFailed
+		return fmt.Errorf("%w: %v", ErrModEditFailed, err)
 	}
 
 	// Step 4: Remove .git directory
-	ctx.Logger.Info("Removing .git directory...")
+	fmt.Println("Removing .git directory...")
 	os.RemoveAll(filepath.Join(projectName, ".git"))
 
 	// Step 5: Run go mod tidy
-	ctx.Logger.Info("Running go mod tidy...")
+	fmt.Println("Running go mod tidy...")
 	if err := goModTidy(projectName); err != nil {
-		ctx.Logger.Warnf("go mod tidy failed: %v (you may need to run it manually)", err)
+		fmt.Printf("Warning: go mod tidy failed: %v (you may need to run it manually)\n", err)
 	}
 
-	fmt.Printf("\n🎉 Project %s created successfully!\n\n", projectName)
+	fmt.Printf("\nProject %s created successfully!\n\n", projectName)
 	fmt.Printf("Next steps:\n")
 	fmt.Printf("  cd %s\n", projectName)
 	fmt.Printf("  go run ./cmd/server\n\n")
 
-	return fmt.Sprintf("Successfully created project %s", projectName), nil
+	return nil
 }
 
 // gitClone clones the kite-layout repository to the specified directory.

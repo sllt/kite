@@ -3,13 +3,13 @@ package wrap
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"strings"
 	"text/template"
 
 	"github.com/emicklei/proto"
-	"github.com/sllt/kite/pkg/kite"
 )
 
 const (
@@ -56,21 +56,21 @@ type WrapperData struct {
 
 type FileType struct {
 	FileSuffix    string
-	CodeGenerator func(*kite.Context, *WrapperData) string
+	CodeGenerator func(*WrapperData) string
 }
 
 // BuildGRPCKiteClient generates gRPC client wrapper code based on a proto definition.
-func BuildGRPCKiteClient(ctx *kite.Context) (any, error) {
+func BuildGRPCKiteClient(protoPath, outDir string) (string, error) {
 	gRPCClient := []FileType{
 		{FileSuffix: clientFileSuffix, CodeGenerator: generateKiteClient},
 		{FileSuffix: clientHealthFile, CodeGenerator: generateKiteClientHealth},
 	}
 
-	return generateWrapper(ctx, gRPCClient...)
+	return generateWrapper(protoPath, outDir, gRPCClient...)
 }
 
-// BuildGRPCKiteServer generates gRPC client and server code based on a proto definition.
-func BuildGRPCKiteServer(ctx *kite.Context) (any, error) {
+// BuildGRPCKiteServer generates gRPC server code based on a proto definition.
+func BuildGRPCKiteServer(protoPath, outDir string) (string, error) {
 	gRPCServer := []FileType{
 		{FileSuffix: serverWrapperFileSuffix, CodeGenerator: generateKiteServerWrapper},
 		{FileSuffix: serverHealthFile, CodeGenerator: generateKiteServerHealthWrapper},
@@ -78,54 +78,57 @@ func BuildGRPCKiteServer(ctx *kite.Context) (any, error) {
 		{FileSuffix: serverFileSuffix, CodeGenerator: generateKiteServer},
 	}
 
-	return generateWrapper(ctx, gRPCServer...)
+	return generateWrapper(protoPath, outDir, gRPCServer...)
 }
 
 // generateWrapper executes the function for specified FileType to create Kite integrated
 // gRPC server/client files with the required services in proto file and
 // specified suffix for every service specified in the proto file.
-func generateWrapper(ctx *kite.Context, options ...FileType) (any, error) {
-	protoPath := ctx.Param("proto")
+func generateWrapper(protoPath, outDir string, options ...FileType) (string, error) {
 	if protoPath == "" {
-		ctx.Logger.Error(ErrNoProtoFile)
-		return nil, ErrNoProtoFile
+		return "", ErrNoProtoFile
 	}
 
-	definition, err := parseProtoFile(ctx, protoPath)
+	definition, err := parseProtoFile(protoPath)
 	if err != nil {
-		ctx.Logger.Errorf("Failed to parse proto file: %v", err)
-		return nil, err
+		return "", err
 	}
 
-	projectPath, packageName := getPackageAndProject(ctx, definition, protoPath)
-	services := getServices(ctx, definition)
-	requests := getRequests(ctx, services)
+	projectPath, packageName := getPackageAndProject(definition, protoPath, outDir)
+	services := getServices(definition)
+	requests := getRequests(services)
+
+	if err := os.MkdirAll(projectPath, os.ModePerm); err != nil {
+		return "", fmt.Errorf("error creating output directory: %w", err)
+	}
+
+	var messages []string
 
 	for _, service := range services {
 		wrapperData := WrapperData{
 			Package:  packageName,
 			Service:  service.Name,
 			Methods:  service.Methods,
-			Requests: uniqueRequestTypes(ctx, service.Methods),
+			Requests: uniqueRequestTypes(service.Methods),
 			Source:   path.Base(protoPath),
 		}
 
-		if err := generateFiles(ctx, projectPath, service.Name, &wrapperData, requests, options...); err != nil {
-			return nil, err
+		msgs, err := generateFiles(projectPath, service.Name, &wrapperData, requests, options...)
+		if err != nil {
+			return "", err
 		}
+
+		messages = append(messages, msgs...)
 	}
 
-	ctx.Logger.Info("Successfully generated all files for Kite integrated gRPC servers/clients")
-
-	return "Successfully generated all files for Kite integrated gRPC servers/clients", nil
+	return strings.Join(messages, "\n"), nil
 }
 
 // parseProtoFile opens and parses the proto file.
-func parseProtoFile(ctx *kite.Context, protoPath string) (*proto.Proto, error) {
+func parseProtoFile(protoPath string) (*proto.Proto, error) {
 	file, err := os.Open(protoPath)
 	if err != nil {
-		ctx.Logger.Errorf("Failed to open proto file: %v", err)
-		return nil, ErrOpeningProtoFile
+		return nil, fmt.Errorf("%w: %v", ErrOpeningProtoFile, err)
 	}
 	defer file.Close()
 
@@ -133,37 +136,45 @@ func parseProtoFile(ctx *kite.Context, protoPath string) (*proto.Proto, error) {
 
 	definition, err := parser.Parse()
 	if err != nil {
-		ctx.Logger.Errorf("Failed to parse proto file: %v", err)
-		return nil, ErrFailedToParseProto
+		return nil, fmt.Errorf("%w: %v", ErrFailedToParseProto, err)
 	}
 
 	return definition, nil
 }
 
 // generateFiles generates files for a given service.
-func generateFiles(ctx *kite.Context, projectPath, serviceName string, wrapperData *WrapperData,
-	requests []string, options ...FileType) error {
+func generateFiles(projectPath, serviceName string, wrapperData *WrapperData,
+	requests []string, options ...FileType) ([]string, error) {
+	var messages []string
+
 	for _, option := range options {
 		if option.FileSuffix == serverRequestFile {
 			wrapperData.Requests = requests
 		}
 
-		generatedCode := option.CodeGenerator(ctx, wrapperData)
+		generatedCode := option.CodeGenerator(wrapperData)
 		if generatedCode == "" {
-			ctx.Logger.Errorf("Failed to generate code for service %s with file suffix %s", serviceName, option.FileSuffix)
-			return ErrGeneratingWrapper
+			return nil, fmt.Errorf("%w: service %s, suffix %s", ErrGeneratingWrapper, serviceName, option.FileSuffix)
 		}
 
 		outputFilePath := getOutputFilePath(projectPath, serviceName, option.FileSuffix)
-		if err := os.WriteFile(outputFilePath, []byte(generatedCode), filePerm); err != nil {
-			ctx.Logger.Errorf("Failed to write file %s: %v", outputFilePath, err)
-			return ErrWritingFile
+
+		// Skip server skeleton file if it already exists
+		if option.FileSuffix == serverFileSuffix {
+			if _, err := os.Stat(outputFilePath); err == nil {
+				messages = append(messages, fmt.Sprintf("Skipped: %s (already exists)", outputFilePath))
+				continue
+			}
 		}
 
-		ctx.Logger.Infof("Generated file for service %s at %s", serviceName, outputFilePath)
+		if err := os.WriteFile(outputFilePath, []byte(generatedCode), filePerm); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrWritingFile, err)
+		}
+
+		messages = append(messages, fmt.Sprintf("Generated: %s", outputFilePath))
 	}
 
-	return nil
+	return messages, nil
 }
 
 // getOutputFilePath generates the output file path based on the file suffix.
@@ -181,7 +192,7 @@ func getOutputFilePath(projectPath, serviceName, fileSuffix string) string {
 }
 
 // getRequests extracts all unique request types from the services.
-func getRequests(ctx *kite.Context, services []ProtoService) []string {
+func getRequests(services []ProtoService) []string {
 	requests := make(map[string]bool)
 
 	for _, service := range services {
@@ -190,20 +201,16 @@ func getRequests(ctx *kite.Context, services []ProtoService) []string {
 		}
 	}
 
-	ctx.Logger.Debugf("Extracted unique request types: %v", requests)
-
 	return mapKeysToSlice(requests)
 }
 
 // uniqueRequestTypes extracts unique request types from methods.
-func uniqueRequestTypes(ctx *kite.Context, methods []ServiceMethod) []string {
+func uniqueRequestTypes(methods []ServiceMethod) []string {
 	requests := make(map[string]bool)
 
 	for _, method := range methods {
 		requests[method.Request] = true
 	}
-
-	ctx.Logger.Debugf("Extracted unique request types for methods: %v", requests)
 
 	return mapKeysToSlice(requests)
 }
@@ -219,7 +226,7 @@ func mapKeysToSlice(m map[string]bool) []string {
 }
 
 // executeTemplate executes a template with the provided data.
-func executeTemplate(ctx *kite.Context, data *WrapperData, tmpl string) string {
+func executeTemplate(data *WrapperData, tmpl string) string {
 	funcMap := template.FuncMap{
 		"lowerFirst": func(s string) string {
 			if s == "" {
@@ -234,7 +241,6 @@ func executeTemplate(ctx *kite.Context, data *WrapperData, tmpl string) string {
 	var buf bytes.Buffer
 
 	if err := tmplInstance.Execute(&buf, data); err != nil {
-		ctx.Logger.Errorf("Template execution failed: %v", err)
 		return ""
 	}
 
@@ -242,32 +248,34 @@ func executeTemplate(ctx *kite.Context, data *WrapperData, tmpl string) string {
 }
 
 // Template generators.
-func generateKiteServerWrapper(ctx *kite.Context, data *WrapperData) string {
-	return executeTemplate(ctx, data, wrapperTemplate)
+func generateKiteServerWrapper(data *WrapperData) string {
+	return executeTemplate(data, wrapperTemplate)
 }
 
-func generateKiteRequestWrapper(ctx *kite.Context, data *WrapperData) string {
-	return executeTemplate(ctx, data, messageTemplate)
+func generateKiteRequestWrapper(data *WrapperData) string {
+	return executeTemplate(data, messageTemplate)
 }
 
-func generateKiteServerHealthWrapper(ctx *kite.Context, data *WrapperData) string {
-	return executeTemplate(ctx, data, healthServerTemplate)
+func generateKiteServerHealthWrapper(data *WrapperData) string {
+	return executeTemplate(data, healthServerTemplate)
 }
 
-func generateKiteClientHealth(ctx *kite.Context, data *WrapperData) string {
-	return executeTemplate(ctx, data, clientHealthTemplate)
+func generateKiteClientHealth(data *WrapperData) string {
+	return executeTemplate(data, clientHealthTemplate)
 }
 
-func generateKiteServer(ctx *kite.Context, data *WrapperData) string {
-	return executeTemplate(ctx, data, serverTemplate)
+func generateKiteServer(data *WrapperData) string {
+	return executeTemplate(data, serverTemplate)
 }
 
-func generateKiteClient(ctx *kite.Context, data *WrapperData) string {
-	return executeTemplate(ctx, data, clientTemplate)
+func generateKiteClient(data *WrapperData) string {
+	return executeTemplate(data, clientTemplate)
 }
 
 // getPackageAndProject extracts the package name and project path from the proto definition.
-func getPackageAndProject(ctx *kite.Context, definition *proto.Proto, protoPath string) (projectPath, packageName string) {
+// If outDir is provided, it is used as the project path instead of the proto file's directory.
+// When outDir is provided, the package name is derived from the last segment of outDir.
+func getPackageAndProject(definition *proto.Proto, protoPath, outDir string) (projectPath, packageName string) {
 	proto.Walk(definition,
 		proto.WithOption(func(opt *proto.Option) {
 			if opt.Name == "go_package" {
@@ -276,14 +284,18 @@ func getPackageAndProject(ctx *kite.Context, definition *proto.Proto, protoPath 
 		}),
 	)
 
-	projectPath = path.Dir(protoPath)
-	ctx.Logger.Debugf("Extracted package name: %s, project path: %s", packageName, projectPath)
+	if outDir != "" {
+		projectPath = outDir
+		packageName = path.Base(outDir)
+	} else {
+		projectPath = path.Dir(protoPath)
+	}
 
 	return projectPath, packageName
 }
 
 // getServices extracts services from the proto definition.
-func getServices(ctx *kite.Context, definition *proto.Proto) []ProtoService {
+func getServices(definition *proto.Proto) []ProtoService {
 	var services []ProtoService
 
 	proto.Walk(definition,
@@ -305,8 +317,6 @@ func getServices(ctx *kite.Context, definition *proto.Proto) []ProtoService {
 			services = append(services, service)
 		}),
 	)
-
-	ctx.Logger.Debugf("Extracted services: %v", services)
 
 	return services
 }
