@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -540,8 +539,6 @@ func TestIsMuxPattern(t *testing.T) {
 }
 
 func TestMatchMuxPattern(t *testing.T) {
-	router := mux.NewRouter()
-
 	testCases := []struct {
 		desc     string
 		pattern  string
@@ -598,24 +595,11 @@ func TestMatchMuxPattern(t *testing.T) {
 			path:     "/api/posts/123",
 			expected: false,
 		},
-		{
-			desc:     "returns false for nil router",
-			pattern:  "/api/users/{id}",
-			method:   "GET",
-			path:     "/api/users/123",
-			expected: false,
-		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			var testRouter *mux.Router
-
-			if tc.desc != "returns false for nil router" {
-				testRouter = router
-			}
-
-			result := matchMuxPattern(tc.pattern, tc.method, tc.path, testRouter)
+			result := matchMuxPattern(tc.pattern, tc.method, tc.path)
 			assert.Equal(t, tc.expected, result)
 		})
 	}

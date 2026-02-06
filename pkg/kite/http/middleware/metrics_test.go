@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -37,18 +37,14 @@ func TestMetrics(t *testing.T) {
 	mockMetrics.On("RecordHistogram", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil)
 
-	router := mux.NewRouter()
-	router.HandleFunc("/test", func(w http.ResponseWriter, _ *http.Request) {
+	router := chi.NewRouter()
+	router.Use(Metrics(mockMetrics))
+	router.Get("/test", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	}).Methods(http.MethodGet).Name("/test")
-
-	route := router.NewRoute()
-	route.Path("/test").Name("/test")
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
 	rr := httptest.NewRecorder()
-
-	router.Use(Metrics(mockMetrics))
 
 	router.ServeHTTP(rr, req)
 
@@ -71,10 +67,9 @@ func TestMetrics_StaticFile(t *testing.T) {
 		t.Errorf("failed to create temporary static file: %v", err)
 	}
 
-	router := mux.NewRouter()
-	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir(tempDir)))).Name("/static/")
-
+	router := chi.NewRouter()
 	router.Use(Metrics(mockMetrics))
+	router.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir(tempDir))))
 
 	req := httptest.NewRequest(http.MethodGet, "/static/example.js", http.NoBody)
 	rr := httptest.NewRecorder()
@@ -104,10 +99,9 @@ func TestMetrics_StaticFileWithQueryParam(t *testing.T) {
 		t.Errorf("failed to create temporary static file: %v", err)
 	}
 
-	router := mux.NewRouter()
-	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir(tempDir)))).Name("/static/")
-
+	router := chi.NewRouter()
 	router.Use(Metrics(mockMetrics))
+	router.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.Dir(tempDir))))
 
 	req := httptest.NewRequest(http.MethodGet, "/static/example.js?v=42", http.NoBody)
 	rr := httptest.NewRecorder()

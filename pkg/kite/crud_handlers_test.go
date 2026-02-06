@@ -2,6 +2,7 @@ package kite
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
@@ -13,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -32,7 +33,9 @@ var (
 
 func createTestContext(method, path, id string, body []byte, cont *infra.Container) *Context {
 	testReq := httptest.NewRequest(method, path+"/"+id, bytes.NewBuffer(body))
-	testReq = mux.SetURLVars(testReq, map[string]string{"id": id})
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", id)
+	testReq = testReq.WithContext(context.WithValue(testReq.Context(), chi.RouteCtxKey, rctx))
 	testReq.Header.Set("Content-Type", "application/json")
 	kiteReq := kiteHTTP.NewRequest(testReq)
 

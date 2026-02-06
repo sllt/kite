@@ -11,7 +11,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 )
 
 const (
@@ -27,15 +27,13 @@ var (
 // Request is an abstraction over the underlying http.Request. This abstraction is useful because it allows us
 // to create applications without being aware of the transport. cmd.Request is another such abstraction.
 type Request struct {
-	req        *http.Request
-	pathParams map[string]string
+	req *http.Request
 }
 
 // NewRequest creates a new Kite Request instance from the given http.Request.
 func NewRequest(r *http.Request) *Request {
 	return &Request{
-		req:        r,
-		pathParams: mux.Vars(r),
+		req: r,
 	}
 }
 
@@ -51,7 +49,7 @@ func (r *Request) Context() context.Context {
 
 // PathParam retrieves a path parameter from the request.
 func (r *Request) PathParam(key string) string {
-	return r.pathParams[key]
+	return chi.URLParam(r.req, key)
 }
 
 // Bind parses the request body and binds it to the provided interface.

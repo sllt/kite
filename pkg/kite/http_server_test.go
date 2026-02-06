@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -23,7 +22,7 @@ func TestRun_ServerStartsListening(t *testing.T) {
 	port := testutil.GetFreePort(t)
 
 	// Create a mock router and add a new route
-	router := &kiteHTTP.Router{}
+	router := kiteHTTP.NewRouter()
 	router.Add(http.MethodGet, "/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -31,14 +30,10 @@ func TestRun_ServerStartsListening(t *testing.T) {
 	// adding registered routes for applying middlewares
 	var registeredMethods []string
 
-	_ = router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
-		met, _ := route.GetMethods()
-		for _, method := range met {
-			if !contains(registeredMethods, method) { // Check for uniqueness before adding
-				registeredMethods = append(registeredMethods, method)
-			}
+	_ = router.Walk(func(method, route string) error {
+		if !contains(registeredMethods, method) {
+			registeredMethods = append(registeredMethods, method)
 		}
-
 		return nil
 	})
 
@@ -89,7 +84,7 @@ func getConfigs(t *testing.T) config.Config {
 
 func TestShutdown_ServerStopsListening(t *testing.T) {
 	// Create a mock router and add a new route
-	router := &kiteHTTP.Router{}
+	router := kiteHTTP.NewRouter()
 	router.Add(http.MethodGet, "/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -127,7 +122,7 @@ func TestShutdown_ServerStopsListening(t *testing.T) {
 
 func TestShutdown_ServerContextDeadline(t *testing.T) {
 	// Create a mock router and add a new route
-	router := &kiteHTTP.Router{}
+	router := kiteHTTP.NewRouter()
 	router.Add(http.MethodGet, "/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))

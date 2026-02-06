@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gorilla/mux"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/sllt/kite/pkg/kite/config"
@@ -152,21 +151,17 @@ func (a *App) httpServerSetup() {
 		a.httpServer.router.AddStaticFiles(a.Logger(), endpoint, dirName)
 	}
 
-	a.httpServer.router.PathPrefix("/").Handler(handler{
+	a.httpServer.router.NotFound(handler{
 		function:  catchAllHandler,
 		container: a.container,
 	})
 
 	var registeredMethods []string
 
-	_ = a.httpServer.router.Walk(func(route *mux.Route, _ *mux.Router, _ []*mux.Route) error {
-		met, _ := route.GetMethods()
-		for _, method := range met {
-			if !contains(registeredMethods, method) { // Check for uniqueness before adding
-				registeredMethods = append(registeredMethods, method)
-			}
+	_ = a.httpServer.router.Walk(func(method, route string) error {
+		if !contains(registeredMethods, method) {
+			registeredMethods = append(registeredMethods, method)
 		}
-
 		return nil
 	})
 
