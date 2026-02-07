@@ -515,8 +515,8 @@ app := kite.New()
     
     app.AddPubSub(eventhub.New(eventhub.Config{
        ConnectionString:          "Endpoint=sb://kite-dev.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=<key>",
-       ContainerConnectionString: "DefaultEndpointsProtocol=https;AccountName=gofrdev;AccountKey=<key>;EndpointSuffix=core.windows.net",
-       StorageServiceURL:         "https://gofrdev.windows.net/",
+       ContainerConnectionString: "DefaultEndpointsProtocol=https;AccountName=kitedev;AccountKey=<key>;EndpointSuffix=core.windows.net",
+       StorageServiceURL:         "https://kitedev.windows.net/",
        StorageContainerName:      "test",
        EventhubName:              "test1",
        ConsumerGroup:             "$Default",

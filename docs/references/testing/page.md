@@ -81,11 +81,11 @@ import (
 
 	"github.com/sllt/kite/pkg/kite"
 	"github.com/sllt/kite/pkg/kite/infra"
-	gofrHttp "github.com/sllt/kite/pkg/kite/http"
+	kiteHttp "github.com/sllt/kite/pkg/kite/http"
 )
 
 func TestAdd(t *testing.T) {
-	type gofrResponse struct {
+	type kiteResponse struct {
 		result any
 		err    error
 	}
@@ -113,9 +113,9 @@ func TestAdd(t *testing.T) {
 			requestBody: `title":"Book Title","isbn":12345}`,
 			mockExpect: func() {
 			},
-			expectedResponse: gofrResponse{
+			expectedResponse: kiteResponse{
 				nil,
-				gofrHttp.ErrorInvalidParam{Params: []string{"body"}}},
+				kiteHttp.ErrorInvalidParam{Params: []string{"body"}}},
 		},
 		{
 			name:        "Successful Insertion",
@@ -126,7 +126,7 @@ func TestAdd(t *testing.T) {
 					WithArgs("Book Title", 12345).
 					WillReturnResult(sqlmock.NewResult(12, 1))
 			},
-			expectedResponse: gofrResponse{
+			expectedResponse: kiteResponse{
 				int64(12),
 				nil,
 			},
@@ -140,7 +140,7 @@ func TestAdd(t *testing.T) {
 					WithArgs("Book Title", 12345).
 					WillReturnError(sql.ErrConnDone)
 			},
-			expectedResponse: gofrResponse{
+			expectedResponse: kiteResponse{
 				nil,
 				sql.ErrConnDone},
 		},
@@ -153,7 +153,7 @@ func TestAdd(t *testing.T) {
 					WithArgs("Book Title", 12345).
 					WillReturnError(errors.New("mocked result error"))
 			},
-			expectedResponse: gofrResponse{
+			expectedResponse: kiteResponse{
 				nil,
 				errors.New("mocked result error")},
 		},
@@ -173,13 +173,13 @@ func TestAdd(t *testing.T) {
 
 			req.Header.Set("Content-Type", "application/json")
 
-			request := gofrHttp.NewRequest(req)
+			request := kiteHttp.NewRequest(req)
 
 			ctx.Request = request
 
 			val, err := Add(ctx)
 
-			response := gofrResponse{val, err}
+			response := kiteResponse{val, err}
 
 			assert.Equal(t, tt.expectedResponse, response, "TEST[%d], Failed.\n%s", i, tt.name)
 		})
@@ -215,7 +215,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/sllt/kite/pkg/kite"
 	"github.com/sllt/kite/pkg/kite/infra"
-	gofrHttp "github.com/sllt/kite/pkg/kite/http"
+	kiteHttp "github.com/sllt/kite/pkg/kite/http"
 )
 
 // Handler that calls multiple HTTP services
@@ -298,7 +298,7 @@ func TestOrderDetailsHandler(t *testing.T) {
 
 		return &kite.Context{
 			Context:   req.Context(),
-			Request:   gofrHttp.NewRequest(req),
+			Request:   kiteHttp.NewRequest(req),
 			Container: container,
 		}
 	}

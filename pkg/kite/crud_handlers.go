@@ -260,7 +260,7 @@ func (e *entity) GetAll(c *Context) (any, error) {
 
 func (e *entity) Get(c *Context) (any, error) {
 	newEntity := reflect.New(e.entityType).Interface()
-	id := c.Request.PathParam("id")
+	id := c.Request.PathParam(e.primaryKey)
 
 	query := sql.SelectByQuery(c.SQL.Dialect(), e.tableName, e.primaryKey)
 
@@ -311,7 +311,7 @@ func (e *entity) Update(c *Context) (any, error) {
 }
 
 func (e *entity) Delete(c *Context) (any, error) {
-	id := c.PathParam("id")
+	id := c.PathParam(e.primaryKey)
 
 	query := sql.DeleteByQuery(c.SQL.Dialect(), e.tableName, e.primaryKey)
 

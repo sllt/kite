@@ -65,9 +65,9 @@ kite wrap grpc server -proto=./path/to/your/proto/file
 
 This command generates:
 - `<SERVICE_NAME>_server.go`: Template file with streaming method signatures
-- `<SERVICE_NAME>_gofr.go`: Generated wrapper with streaming instrumentation
-- `request_gofr.go`: Request wrapper for context binding
-- `health_gofr.go`: Health check server integration
+- `<SERVICE_NAME>_kite.go`: Generated wrapper with streaming instrumentation
+- `request_kite.go`: Request wrapper for context binding
+- `health_kite.go`: Health check server integration
 
 ### Server-Side Streaming Implementation
 
@@ -374,7 +374,7 @@ func main() {
     app := kite.New()
 
     // Register streaming service
-    server.RegisterChatServiceServerWithGofr(app, server.NewChatServiceKiteServer())
+    server.RegisterChatServiceServerWithKite(app, server.NewChatServiceKiteServer())
 
     app.Run()
 }

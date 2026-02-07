@@ -43,6 +43,7 @@ func setupGRPCMetricExpectations(mockMetrics *infra.MockMetrics) {
 	mockMetrics.EXPECT().NewCounter("grpc_services_registered_total", "Total gRPC services registered").AnyTimes()
 	mockMetrics.EXPECT().SetGauge("grpc_server_status", gomock.Any()).AnyTimes()
 	mockMetrics.EXPECT().IncrementCounter(gomock.Any(), "grpc_server_errors_total").AnyTimes()
+	mockMetrics.EXPECT().IncrementCounter(gomock.Any(), "grpc_services_registered_total").AnyTimes()
 	mockMetrics.EXPECT().RecordHistogram(gomock.Any(), gomock.Any(), gomock.Any()).AnyTimes()
 }
 
@@ -120,30 +121,57 @@ func TestGRPCServer_AddUnaryInterceptors(t *testing.T) {
 	g.addUnaryInterceptors(interceptors...)
 
 	assert.Len(t, g.interceptors, 4) // 2 default + 2 test interceptors
+	assert.False(t, g.serverCreated, "server should not be created yet")
 }
 
 func TestGRPCServer_CreateServer(t *testing.T) {
 	_, _, g := setupTestGRPCServer(t, 9999, false)
 
+	assert.False(t, g.serverCreated, "server should not be created initially")
+
 	err := g.createServer()
 	require.NoError(t, err)
 	assert.NotNil(t, g.server)
+	assert.True(t, g.serverCreated, "serverCreated flag should be set")
+
+	// Second call should be idempotent
+	err = g.createServer()
+	require.NoError(t, err)
 }
 
 func TestGRPCServer_RegisterService(t *testing.T) {
-	_, _, g := setupTestGRPCServer(t, 9999, false)
+	c, mocks, g := setupTestGRPCServer(t, 9999, false)
+	setupGRPCMetricExpectations(mocks.Metrics)
 
-	err := g.createServer()
-	require.NoError(t, err)
+	app := New()
+	app.container = c
+	app.grpcServer = g
 
 	healthServer := health.NewServer()
 	desc := &grpc_health_v1.Health_ServiceDesc
 
-	g.server.RegisterService(desc, healthServer)
+	// RegisterService should queue the service
+	app.RegisterService(desc, healthServer)
+
+	assert.Len(t, g.pendingServices, 1, "service should be queued")
+	assert.Nil(t, g.server, "server should not be created yet")
+	assert.False(t, g.serverCreated, "serverCreated flag should be false")
+
+	// Run should create server and register pending services
+	go g.Run(c)
+	time.Sleep(100 * time.Millisecond)
+
+	assert.NotNil(t, g.server, "server should be created during Run")
+	assert.True(t, g.serverCreated, "serverCreated flag should be true")
 
 	services := g.server.GetServiceInfo()
 	_, ok := services["grpc.health.v1.Health"]
 	assert.True(t, ok, "health service should be registered")
+
+	// Cleanup
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	_ = g.Shutdown(ctx)
 }
 
 func TestGRPC_ServerRun(t *testing.T) {
@@ -419,4 +447,86 @@ func TestApp_WithReflection(t *testing.T) {
 	services := app.grpcServer.server.GetServiceInfo()
 	_, ok := services["grpc.reflection.v1alpha.ServerReflection"]
 	assert.True(t, ok, "reflection service should be registered")
+}
+
+func TestApp_InterceptorOrderingWithServiceRegistration(t *testing.T) {
+	freePort := testutil.GetFreePort(t)
+	c, mocks, g := setupTestGRPCServer(t, freePort, false)
+	setupGRPCMetricExpectations(mocks.Metrics)
+
+	app := New()
+	app.container = c
+	app.grpcServer = g
+
+	// Add interceptors BEFORE RegisterService
+	testInterceptor := func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		return handler(ctx, req)
+	}
+	app.AddGRPCUnaryInterceptors(testInterceptor)
+
+	// Register a service
+	healthServer := health.NewServer()
+	desc := &grpc_health_v1.Health_ServiceDesc
+	app.RegisterService(desc, healthServer)
+
+	// Server should not be created yet
+	assert.Nil(t, g.server, "server should not be created until Run")
+	assert.False(t, g.serverCreated)
+
+	// Run should create server with all interceptors
+	go g.Run(c)
+	time.Sleep(100 * time.Millisecond)
+
+	assert.True(t, g.serverCreated)
+	assert.Len(t, g.interceptors, 3) // 2 default + 1 test
+
+	// Cleanup
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	_ = g.Shutdown(ctx)
+}
+
+func TestApp_InterceptorAfterServerCreation(t *testing.T) {
+	c, _, g := setupTestGRPCServer(t, 9999, false)
+
+	app := New()
+	app.container = c
+	app.grpcServer = g
+
+	// Create server first
+	err := g.createServer()
+	require.NoError(t, err)
+	assert.True(t, g.serverCreated)
+
+	initialCount := len(g.interceptors)
+
+	// Try to add interceptors after server creation - should be rejected
+	testInterceptor := func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		return handler(ctx, req)
+	}
+	app.AddGRPCUnaryInterceptors(testInterceptor)
+
+	// Interceptor should not be added
+	assert.Len(t, g.interceptors, initialCount, "interceptor should not be added after server creation")
+}
+
+func TestApp_AuthAfterServerCreation(t *testing.T) {
+	c, _, g := setupTestGRPCServer(t, 9999, false)
+
+	app := New()
+	app.container = c
+	app.grpcServer = g
+
+	// Create server first
+	err := g.createServer()
+	require.NoError(t, err)
+	assert.True(t, g.serverCreated)
+
+	initialCount := len(g.interceptors)
+
+	// Try to enable auth after server creation - should be rejected
+	app.EnableBasicAuth("user", "pass")
+
+	// Auth interceptors should not be added
+	assert.Len(t, g.interceptors, initialCount, "auth interceptors should not be added after server creation")
 }

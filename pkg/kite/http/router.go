@@ -25,6 +25,9 @@ var errReadPermissionDenied = fmt.Errorf("file does not have read permission")
 type Router struct {
 	mux              *chi.Mux
 	RegisteredRoutes *[]string
+	routesAdded      bool
+	lateMiddlewares  []func(http.Handler) http.Handler
+	cachedHandler    http.Handler
 }
 
 type Middleware func(handler http.Handler) http.Handler
@@ -60,6 +63,23 @@ func (rou *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Use cached handler if available (includes late middlewares)
+	if rou.cachedHandler != nil {
+		rou.cachedHandler.ServeHTTP(w, r)
+		return
+	}
+
+	// Build and cache handler with late middlewares if any
+	if len(rou.lateMiddlewares) > 0 {
+		var h http.Handler = rou.mux
+		for i := len(rou.lateMiddlewares) - 1; i >= 0; i-- {
+			h = rou.lateMiddlewares[i](h)
+		}
+		rou.cachedHandler = h
+		rou.cachedHandler.ServeHTTP(w, r)
+		return
+	}
+
 	// Delegate to the underlying chi router
 	rou.mux.ServeHTTP(w, r)
 }
@@ -68,25 +88,30 @@ func (rou *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (rou *Router) Add(method, pattern string, handler http.Handler) {
 	h := otelhttp.NewHandler(handler, "kite-router")
 	rou.mux.Method(method, pattern, h)
+	rou.routesAdded = true
 }
 
 // Use registers middlewares to the router.
-// Note: chi requires middlewares to be added before routes. If routes already exist,
-// this method will handle the error gracefully by wrapping the router.
+// If routes are already registered, middleware is stored and applied as a wrapper
+// in ServeHTTP, since chi requires middlewares to be added before routes.
 func (rou *Router) Use(middlewares ...func(http.Handler) http.Handler) {
-	// Try to add middleware directly. Chi will panic if routes already exist.
-	defer func() {
-		if r := recover(); r != nil {
-			// If panic occurs (routes already added), we can't add global middleware
-			// This is a chi limitation - middlewares must be defined before routes
-			// In production code, this should be prevented by proper initialization order
-		}
-	}()
+	if rou.routesAdded {
+		rou.lateMiddlewares = append(rou.lateMiddlewares, middlewares...)
+		rou.cachedHandler = nil // invalidate cache
+		return
+	}
 	rou.mux.Use(middlewares...)
 }
 
 // UseMiddleware registers middlewares to the router.
 func (rou *Router) UseMiddleware(mws ...Middleware) {
+	if rou.routesAdded {
+		for _, m := range mws {
+			rou.lateMiddlewares = append(rou.lateMiddlewares, m)
+		}
+		rou.cachedHandler = nil // invalidate cache
+		return
+	}
 	for _, m := range mws {
 		rou.mux.Use(m)
 	}
@@ -108,6 +133,7 @@ func (rou *Router) Walk(fn func(method, route string) error) error {
 // This is a convenience method that delegates to chi.Mux.Handle.
 func (rou *Router) Handle(pattern string, handler http.Handler) {
 	rou.mux.Handle(pattern, handler)
+	rou.routesAdded = true
 }
 
 type staticFileConfig struct {

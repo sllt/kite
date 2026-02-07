@@ -37,7 +37,6 @@ func (e *EnvLoader) read(folder string) {
 	var (
 		defaultFile  = folder + defaultFileName
 		overrideFile = folder + defaultOverrideFileName
-		env          = e.Get("APP_ENV")
 	)
 
 	// Only Capture initial system environment before any file loading
@@ -53,6 +52,9 @@ func (e *EnvLoader) read(folder string) {
 	} else {
 		e.logger.Infof("Loaded config from file: %v", defaultFile)
 	}
+
+	// Read APP_ENV AFTER .env is loaded to support APP_ENV defined in .env file
+	env := e.Get("APP_ENV")
 
 	if env != "" {
 		// If 'APP_ENV' is set to x, then Kite will read '.env' from configs directory, and then it will be overwritten

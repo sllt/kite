@@ -1,4 +1,4 @@
-# gRPC with Gofr
+# gRPC with Kite
 
 We have already seen how Kite can help ease the development of HTTP servers, but there are cases where performance is primarily required sacrificing flexibility. In these types of scenarios gRPC protocol comes into picture. {% new-tab-link title="gRPC" href="https://grpc.io/docs/what-is-grpc/introduction/" /%} is an open-source RPC(Remote Procedure Call) framework initially developed by Google.
 
@@ -120,7 +120,7 @@ that of the specified proto file.
   - Bind the request payload using `ctx.Bind(&<SERVICE_REQUEST>)`.
   - Process the request and generate a response.
 
-## Registering the gRPC Service with Gofr
+## Registering the gRPC Service with Kite
 
 **1. Import Necessary Packages:**
 
@@ -138,7 +138,7 @@ import (
 func main() {
     app := kite.New()
 
-    packageName.Register<SERVICE_NAME>ServerWithGofr(app, &<PACKAGE_NAME>.New<SERVICE_NAME>KiteServer())
+    packageName.Register<SERVICE_NAME>ServerWithKite(app, &<PACKAGE_NAME>.New<SERVICE_NAME>KiteServer())
 
     app.Run()
 }
@@ -163,7 +163,7 @@ func main() {
     	grpc.ConnectionTimeout(10 * time.Second),
     )
 
-    packageName.Register<SERVICE_NAME>ServerWithGofr(app, &<PACKAGE_NAME>.New<SERVICE_NAME>KiteServer())
+    packageName.Register<SERVICE_NAME>ServerWithKite(app, &<PACKAGE_NAME>.New<SERVICE_NAME>KiteServer())
 
     app.Run()
 }
@@ -180,7 +180,7 @@ func main() {
 
     app.AddGRPCUnaryInterceptors(authInterceptor)
 
-    packageName.Register<SERVICE_NAME>ServerWithGofr(app, &<PACKAGE_NAME>.New<SERVICE_NAME>KiteServer())
+    packageName.Register<SERVICE_NAME>ServerWithKite(app, &<PACKAGE_NAME>.New<SERVICE_NAME>KiteServer())
 
     app.Run()
 }

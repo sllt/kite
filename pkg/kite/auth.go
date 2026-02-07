@@ -133,6 +133,10 @@ func (a *App) addAuthMiddleware(httpMW func(http.Handler) http.Handler,
 	}
 
 	if a.grpcServer != nil {
+		if a.grpcServer.serverCreated {
+			a.container.Logger.Error("cannot add auth interceptors after gRPC server has been created - call authentication methods before RegisterService or Run")
+			return
+		}
 		a.grpcServer.addUnaryInterceptors(grpcUnary)
 		a.grpcServer.addStreamInterceptors(grpcStream)
 	}

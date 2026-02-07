@@ -36,11 +36,11 @@ The UseMiddleware method is ideal for simple middleware that doesn't need direct
 import (
 	"net/http"
 
-	gofrHTTP "github.com/sllt/kite/pkg/kite/http"
+	kiteHTTP "github.com/sllt/kite/pkg/kite/http"
 )
 
 // Define your custom middleware function
-func customMiddleware() gofrHTTP.Middleware {
+func customMiddleware() kiteHTTP.Middleware {
 	return func(inner http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Your custom logic here
