@@ -85,6 +85,10 @@ func (r Responder) buildResponse(data any, meta map[string]any, err error) respo
 // getHTTPStatusCode returns the HTTP status code for the response.
 func (r Responder) getHTTPStatusCode(data any, err error) int {
 	if err == nil {
+		if customCode, ok := getCustomStatusCode(data); ok {
+			return customCode
+		}
+
 		return handleSuccessStatusCode(r.method, data)
 	}
 
@@ -164,6 +168,10 @@ func (r Responder) handleSpecialResponseTypes(data any, err error) bool {
 // getStatusCodeForSpecialResponse returns the appropriate status code for special response types.
 func (r Responder) getStatusCodeForSpecialResponse(data any, err error) int {
 	if err == nil {
+		if customCode, ok := getCustomStatusCode(data); ok {
+			return customCode
+		}
+
 		return handleSuccessStatusCode(r.method, data)
 	}
 
@@ -172,6 +180,28 @@ func (r Responder) getStatusCodeForSpecialResponse(data any, err error) int {
 	}
 
 	return http.StatusInternalServerError
+}
+
+// getCustomStatusCode extracts optional HTTP status code overrides from supported response types.
+func getCustomStatusCode(data any) (int, bool) {
+	var statusCode int
+
+	switch v := data.(type) {
+	case resTypes.Raw:
+		statusCode = v.StatusCode
+	case resTypes.XML:
+		statusCode = v.StatusCode
+	case resTypes.File:
+		statusCode = v.StatusCode
+	default:
+		return 0, false
+	}
+
+	if statusCode < http.StatusContinue || statusCode > 999 {
+		return 0, false
+	}
+
+	return statusCode, true
 }
 
 // handleSuccessStatusCode returns the status code for successful responses based on HTTP method.
