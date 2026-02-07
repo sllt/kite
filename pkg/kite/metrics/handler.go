@@ -5,16 +5,16 @@ import (
 	"net/http/pprof"
 	"runtime"
 
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // GetHandler creates a new HTTP handler that serves metrics collected by the provided metrics manager to the '/metrics' route.
 func GetHandler(m Manager) http.Handler {
-	var router = mux.NewRouter()
+	router := chi.NewRouter()
 
 	// Prometheus
-	router.NewRoute().Methods(http.MethodGet).Path("/metrics").Handler(systemMetricsHandler(m, promhttp.Handler()))
+	router.Get("/metrics", systemMetricsHandler(m, promhttp.Handler()).ServeHTTP)
 
 	//   - /debug/pprof/cmdline
 	//   - /debug/pprof/profile
@@ -30,7 +30,7 @@ func GetHandler(m Manager) http.Handler {
 	router.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	router.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
-	router.NewRoute().Methods(http.MethodGet).PathPrefix("/debug/pprof/").HandlerFunc(pprof.Index)
+	router.Get("/debug/pprof/*", pprof.Index)
 
 	return router
 }

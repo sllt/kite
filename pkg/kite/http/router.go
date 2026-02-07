@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/sllt/kite/pkg/kite/logging"
@@ -23,7 +23,7 @@ var errReadPermissionDenied = fmt.Errorf("file does not have read permission")
 
 // Router is responsible for routing HTTP request.
 type Router struct {
-	mux.Router
+	mux              *chi.Mux
 	RegisteredRoutes *[]string
 }
 
@@ -31,16 +31,11 @@ type Middleware func(handler http.Handler) http.Handler
 
 // NewRouter creates a new Router instance.
 func NewRouter() *Router {
-	muxRouter := mux.NewRouter().StrictSlash(false).SkipClean(true)
 	routes := make([]string, 0)
-	r := &Router{
-		Router:           *muxRouter,
+	return &Router{
+		mux:              chi.NewRouter(),
 		RegisteredRoutes: &routes,
 	}
-
-	r.Router = *muxRouter
-
-	return r
 }
 
 // ServeHTTP implements [http.Handler] interface with path normalization.
@@ -65,24 +60,54 @@ func (rou *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Delegate to the underlying Gorilla Mux router
-	rou.Router.ServeHTTP(w, r)
+	// Delegate to the underlying chi router
+	rou.mux.ServeHTTP(w, r)
 }
 
 // Add adds a new route with the given HTTP method, pattern, and handler, wrapping the handler with OpenTelemetry instrumentation.
 func (rou *Router) Add(method, pattern string, handler http.Handler) {
 	h := otelhttp.NewHandler(handler, "kite-router")
-	rou.Router.NewRoute().Methods(method).Path(pattern).Handler(h)
+	rou.mux.Method(method, pattern, h)
+}
+
+// Use registers middlewares to the router.
+func (rou *Router) Use(middlewares ...func(http.Handler) http.Handler) {
+	rou.mux.Use(middlewares...)
 }
 
 // UseMiddleware registers middlewares to the router.
 func (rou *Router) UseMiddleware(mws ...Middleware) {
-	middlewares := make([]mux.MiddlewareFunc, 0, len(mws))
 	for _, m := range mws {
-		middlewares = append(middlewares, mux.MiddlewareFunc(m))
+		rou.mux.Use(m)
 	}
+}
 
-	rou.Use(middlewares...)
+// NotFound sets the handler for requests that don't match any route.
+func (rou *Router) NotFound(handler http.Handler) {
+	rou.mux.NotFound(handler.ServeHTTP)
+}
+
+// Walk traverses all registered routes calling the given function for each route.
+func (rou *Router) Walk(fn func(method, route string) error) error {
+	return chi.Walk(rou.mux, func(method, route string, handler http.Handler, middlewares ...func(http.Handler) http.Handler) error {
+		return fn(method, route)
+	})
+}
+
+// Handle registers a handler for the given pattern.
+// This is a convenience method that delegates to chi.Mux.Handle.
+func (rou *Router) Handle(pattern string, handler http.Handler) {
+	rou.mux.Handle(pattern, handler)
+}
+
+// RouteGroup creates a chi sub-router with the given prefix for scoped middleware.
+func (rou *Router) RouteGroup(prefix string, fn func(chi.Router)) {
+	rou.mux.Route(prefix, fn)
+}
+
+// Mux returns the underlying chi.Mux.
+func (rou *Router) Mux() chi.Router {
+	return rou.mux
 }
 
 type staticFileConfig struct {
@@ -99,7 +124,7 @@ func (rou *Router) AddStaticFiles(logger logging.Logger, endpoint, dirName strin
 		endpoint += "/"
 	}
 
-	rou.Router.NewRoute().PathPrefix(endpoint).Handler(http.StripPrefix(endpoint, cfg.staticHandler(fileServer)))
+	rou.mux.Handle(endpoint+"*", http.StripPrefix(endpoint, cfg.staticHandler(fileServer)))
 
 	logger.Logf("registered static files at endpoint %v from directory %v", endpoint, dirName)
 }

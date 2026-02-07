@@ -122,7 +122,7 @@ func listHandler(ctx *kite.Context) (any, error) {
  data := TodoPageData{
   PageTitle: "My TODO list",
   Todos: []Todo{
-   {Title: "Expand on Gofr documentation ", Done: false},
+   {Title: "Expand on Kite documentation ", Done: false},
    {Title: "Add more examples", Done: true},
    {Title: "Write some articles", Done: false},
   },

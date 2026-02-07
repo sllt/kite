@@ -187,6 +187,9 @@ func TestKite_ServerRoutes(t *testing.T) {
 		return "Success", nil
 	})
 
+	// Compile the registry so routes are registered on the chi router
+	g.httpServer.registry.compile(g.httpServer.router.Mux(), g.container, 0)
+
 	for i, tc := range testCases {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(tc.method, tc.target, http.NoBody)
@@ -385,17 +388,20 @@ func TestEnableBasicAuthWithFunc(t *testing.T) {
 	// Initialize a new App instance
 	a := &App{
 		httpServer: &httpServer{
-			router: kiteHTTP.NewRouter(),
-			port:   port,
+			router:   kiteHTTP.NewRouter(),
+			registry: newRouteRegistry(),
+			port:     port,
 		},
 		container: c,
 	}
 
+	a.EnableOAuth(jwksServer.URL, 600)
+
+	a.httpServer.registry.compile(a.httpServer.router.Mux(), a.container, 0)
+
 	a.httpServer.router.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Println(w, "Hello, world!")
 	}))
-
-	a.EnableOAuth(jwksServer.URL, 600)
 
 	server := httptest.NewServer(a.httpServer.router)
 	defer server.Close()
@@ -477,17 +483,20 @@ func Test_EnableBasicAuth(t *testing.T) {
 			// Initialize a new App instance
 			a := &App{
 				httpServer: &httpServer{
-					router: kiteHTTP.NewRouter(),
-					port:   port,
+					router:   kiteHTTP.NewRouter(),
+					registry: newRouteRegistry(),
+					port:     port,
 				},
 				container: mockContainer,
 			}
 
+			a.EnableBasicAuth(tt.args...)
+
+			a.httpServer.registry.compile(a.httpServer.router.Mux(), a.container, 0)
+
 			a.httpServer.router.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				fmt.Fprintln(w, "Hello, world!")
 			}))
-
-			a.EnableBasicAuth(tt.args...)
 
 			server := httptest.NewServer(a.httpServer.router)
 			defer server.Close()
@@ -544,8 +553,9 @@ func Test_EnableBasicAuthWithValidator(t *testing.T) {
 			// Initialize a new App instance
 			a := &App{
 				httpServer: &httpServer{
-					router: kiteHTTP.NewRouter(),
-					port:   port,
+					router:   kiteHTTP.NewRouter(),
+					registry: newRouteRegistry(),
+					port:     port,
 				},
 				container: mockContainer,
 			}
@@ -555,6 +565,8 @@ func Test_EnableBasicAuthWithValidator(t *testing.T) {
 			}
 
 			a.EnableBasicAuthWithValidator(validateFunc)
+
+			a.httpServer.registry.compile(a.httpServer.router.Mux(), a.container, 0)
 
 			a.httpServer.router.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				fmt.Fprintln(w, "Hello, world!")
@@ -716,8 +728,9 @@ func Test_UseMiddleware(t *testing.T) {
 
 	app := &App{
 		httpServer: &httpServer{
-			router: kiteHTTP.NewRouter(),
-			port:   port,
+			router:   kiteHTTP.NewRouter(),
+			registry: newRouteRegistry(),
+			port:     port,
 		},
 		container: c,
 		Config: config.NewMockConfig(map[string]string{
@@ -726,7 +739,7 @@ func Test_UseMiddleware(t *testing.T) {
 		}),
 	}
 
-	app.UseMiddleware(testMiddleware)
+	app.Use(testMiddleware)
 
 	app.GET("/test", func(*Context) (any, error) {
 		return "success", nil
@@ -785,8 +798,9 @@ func TestUseMiddlewareWithContainer(t *testing.T) {
 	// Create a new App with a mock server
 	app := &App{
 		httpServer: &httpServer{
-			router: kiteHTTP.NewRouter(),
-			port:   port,
+			router:   kiteHTTP.NewRouter(),
+			registry: newRouteRegistry(),
+			port:     port,
 		},
 		container: mockContainer,
 		Config:    config.NewMockConfig(map[string]string{"REQUEST_TIMEOUT": "5"}),
@@ -795,7 +809,10 @@ func TestUseMiddlewareWithContainer(t *testing.T) {
 	// Use the middleware with the container
 	app.UseMiddlewareWithContainer(middleware)
 
-	// Register the handler to a route for testing
+	// Compile the registry so middleware is applied to the chi router
+	app.httpServer.registry.compile(app.httpServer.router.Mux(), app.container, 0)
+
+	// Register the handler directly on chi (after compile, so middleware applies)
 	app.httpServer.router.Handle("/test", handler)
 
 	// Create a test request
@@ -818,8 +835,9 @@ func Test_APIKeyAuthMiddleware(t *testing.T) {
 
 	app := &App{
 		httpServer: &httpServer{
-			router: kiteHTTP.NewRouter(),
-			port:   port,
+			router:   kiteHTTP.NewRouter(),
+			registry: newRouteRegistry(),
+			port:     port,
 		},
 		container: c,
 		Config:    config.NewMockConfig(map[string]string{"REQUEST_TIMEOUT": "5"}),

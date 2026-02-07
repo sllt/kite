@@ -16,6 +16,7 @@ import (
 
 type httpServer struct {
 	router      *kiteHTTP.Router
+	registry    *RouteRegistry
 	port        int
 	ws          *websocket.Manager
 	srv         *http.Server
@@ -38,26 +39,19 @@ func newHTTPServer(c *infra.Container, port int, middlewareConfigs middleware.Co
 		middleware.Logging(middlewareConfigs.LogProbes, c.Logger),
 		middleware.CORS(middlewareConfigs.CorsHeaders, r.RegisteredRoutes),
 		middleware.Metrics(c.Metrics()),
+		middleware.WSHandlerUpgrade(c, wsManager),
 	)
 
 	return &httpServer{
-		router: r,
-		port:   port,
-		ws:     wsManager,
+		router:      r,
+		registry:    newRouteRegistry(),
+		port:        port,
+		ws:          wsManager,
+		staticFiles: make(map[string]string),
 	}
 }
 
 func (s *httpServer) run(c *infra.Container) {
-	// Developer Note:
-	//	WebSocket connections do not inherently support authentication mechanisms.
-	//	It is recommended to authenticate users before upgrading to a WebSocket connection.
-	//	Hence, we are registering websocket middleware here, to ensure that authentication or other
-	//	middleware logic is executed during the initial HTTP handshake request, prior to upgrading
-	//	the connection to WebSocket, if any.
-	s.router.Use(
-		middleware.WSHandlerUpgrade(c, s.ws),
-	)
-
 	if s.srv != nil {
 		c.Logf("Server already running on port: %d", s.port)
 		return

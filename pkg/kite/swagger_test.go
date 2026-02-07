@@ -2,6 +2,7 @@ package kite
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -10,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -87,7 +88,9 @@ func TestSwaggerHandler(t *testing.T) {
 
 	for _, tc := range tests {
 		testReq := httptest.NewRequest(http.MethodGet, "/.well-known/swagger"+"/"+tc.fileName, http.NoBody)
-		testReq = mux.SetURLVars(testReq, map[string]string{"name": tc.fileName})
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("name", tc.fileName)
+		testReq = testReq.WithContext(context.WithValue(testReq.Context(), chi.RouteCtxKey, rctx))
 		kiteReq := kiteHTTP.NewRequest(testReq)
 
 		ctx := newContext(kiteHTTP.NewResponder(httptest.NewRecorder(), http.MethodGet), kiteReq, testContainer)
@@ -110,7 +113,9 @@ func TestSwaggerUIHandler_Error(t *testing.T) {
 	testContainer, _ := infra.NewMockContainer(t)
 
 	testReq := httptest.NewRequest(http.MethodGet, "/.well-known/swagger"+"/abc.abc", http.NoBody)
-	testReq = mux.SetURLVars(testReq, map[string]string{"name": "abc.abc"})
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("name", "abc.abc")
+	testReq = testReq.WithContext(context.WithValue(testReq.Context(), chi.RouteCtxKey, rctx))
 
 	kiteReq := kiteHTTP.NewRequest(testReq)
 	ctx := newContext(kiteHTTP.NewResponder(httptest.NewRecorder(), http.MethodGet), kiteReq, testContainer)

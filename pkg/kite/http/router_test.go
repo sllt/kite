@@ -348,3 +348,259 @@ func runStaticFileTests(t *testing.T, tempDir string, testCases []struct {
 		})
 	}
 }
+
+// TestRouter_PathParam verifies that chi.URLParam correctly extracts path parameters
+// through the kite Request.PathParam method.
+func TestRouter_PathParam(t *testing.T) {
+	router := NewRouter()
+
+	var capturedID string
+	router.Add(http.MethodGet, "/users/{id}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		req := NewRequest(r)
+		capturedID = req.PathParam("id")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(capturedID))
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/users/123", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "123", capturedID)
+	assert.Equal(t, "123", rec.Body.String())
+}
+
+// TestRouter_MultiplePathParams verifies extraction of multiple path parameters.
+func TestRouter_MultiplePathParams(t *testing.T) {
+	router := NewRouter()
+
+	var capturedUserID, capturedPostID string
+	router.Add(http.MethodGet, "/users/{userId}/posts/{postId}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		req := NewRequest(r)
+		capturedUserID = req.PathParam("userId")
+		capturedPostID = req.PathParam("postId")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(fmt.Sprintf("user:%s,post:%s", capturedUserID, capturedPostID)))
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/users/456/posts/789", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "456", capturedUserID)
+	assert.Equal(t, "789", capturedPostID)
+	assert.Equal(t, "user:456,post:789", rec.Body.String())
+}
+
+// TestRouter_UseMiddleware verifies middleware execution order.
+func TestRouter_UseMiddleware(t *testing.T) {
+	router := NewRouter()
+
+	var executionOrder []string
+
+	middleware1 := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			executionOrder = append(executionOrder, "middleware1-before")
+			next.ServeHTTP(w, r)
+			executionOrder = append(executionOrder, "middleware1-after")
+		})
+	}
+
+	middleware2 := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			executionOrder = append(executionOrder, "middleware2-before")
+			next.ServeHTTP(w, r)
+			executionOrder = append(executionOrder, "middleware2-after")
+		})
+	}
+
+	router.UseMiddleware(middleware1, middleware2)
+
+	router.Add(http.MethodGet, "/test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		executionOrder = append(executionOrder, "handler")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	expectedOrder := []string{
+		"middleware1-before",
+		"middleware2-before",
+		"handler",
+		"middleware2-after",
+		"middleware1-after",
+	}
+	assert.Equal(t, expectedOrder, executionOrder)
+}
+
+// TestRouter_NotFound verifies custom NotFound handler.
+func TestRouter_NotFound(t *testing.T) {
+	router := NewRouter()
+
+	notFoundCalled := false
+	router.NotFound(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		notFoundCalled = true
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("custom 404"))
+	}))
+
+	router.Add(http.MethodGet, "/exists", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Test unmatched route
+	req := httptest.NewRequest(http.MethodGet, "/does-not-exist", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.True(t, notFoundCalled)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, "custom 404", rec.Body.String())
+
+	// Test matched route
+	notFoundCalled = false
+	req = httptest.NewRequest(http.MethodGet, "/exists", http.NoBody)
+	rec = httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.False(t, notFoundCalled)
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestRouter_Walk verifies route traversal functionality.
+func TestRouter_Walk(t *testing.T) {
+	router := NewRouter()
+
+	// Register multiple routes with different methods
+	router.Add(http.MethodGet, "/users", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	router.Add(http.MethodPost, "/users", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	router.Add(http.MethodGet, "/users/{id}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	router.Add(http.MethodDelete, "/users/{id}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	routes := make(map[string][]string)
+	err := router.Walk(func(method, route string) error {
+		routes[route] = append(routes[route], method)
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.Contains(t, routes, "/users")
+	assert.Contains(t, routes, "/users/{id}")
+	assert.Contains(t, routes["/users"], http.MethodGet)
+	assert.Contains(t, routes["/users"], http.MethodPost)
+	assert.Contains(t, routes["/users/{id}"], http.MethodGet)
+	assert.Contains(t, routes["/users/{id}"], http.MethodDelete)
+}
+
+// TestRouter_MethodRouting verifies that different HTTP methods on the same path
+// route to different handlers.
+func TestRouter_MethodRouting(t *testing.T) {
+	router := NewRouter()
+
+	getHandlerCalled := false
+	postHandlerCalled := false
+	putHandlerCalled := false
+	deleteHandlerCalled := false
+
+	router.Add(http.MethodGet, "/resource", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		getHandlerCalled = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("GET"))
+	}))
+
+	router.Add(http.MethodPost, "/resource", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		postHandlerCalled = true
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("POST"))
+	}))
+
+	router.Add(http.MethodPut, "/resource", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		putHandlerCalled = true
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("PUT"))
+	}))
+
+	router.Add(http.MethodDelete, "/resource", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		deleteHandlerCalled = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	tests := []struct {
+		method           string
+		expectedCode     int
+		expectedBody     string
+		expectedGetCall  bool
+		expectedPostCall bool
+		expectedPutCall  bool
+		expectedDelCall  bool
+	}{
+		{http.MethodGet, http.StatusOK, "GET", true, false, false, false},
+		{http.MethodPost, http.StatusCreated, "POST", false, true, false, false},
+		{http.MethodPut, http.StatusOK, "PUT", false, false, true, false},
+		{http.MethodDelete, http.StatusNoContent, "", false, false, false, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.method, func(t *testing.T) {
+			// Reset flags
+			getHandlerCalled = false
+			postHandlerCalled = false
+			putHandlerCalled = false
+			deleteHandlerCalled = false
+
+			req := httptest.NewRequest(tc.method, "/resource", http.NoBody)
+			rec := httptest.NewRecorder()
+
+			router.ServeHTTP(rec, req)
+
+			assert.Equal(t, tc.expectedCode, rec.Code)
+			assert.Equal(t, tc.expectedBody, rec.Body.String())
+			assert.Equal(t, tc.expectedGetCall, getHandlerCalled)
+			assert.Equal(t, tc.expectedPostCall, postHandlerCalled)
+			assert.Equal(t, tc.expectedPutCall, putHandlerCalled)
+			assert.Equal(t, tc.expectedDelCall, deleteHandlerCalled)
+		})
+	}
+}
+
+// TestRouter_MiddlewareBeforeRoutes verifies that middleware can be added before routes.
+func TestRouter_MiddlewareBeforeRoutes(t *testing.T) {
+	router := NewRouter()
+
+	middlewareCalled := false
+	middleware := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			middlewareCalled = true
+			w.Header().Set("X-Middleware", "applied")
+			next.ServeHTTP(w, r)
+		})
+	}
+
+	// Add middleware BEFORE routes
+	router.Use(middleware)
+
+	// Add route AFTER middleware
+	router.Add(http.MethodGet, "/test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/test", http.NoBody)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, middlewareCalled, "Middleware should be called")
+	assert.Equal(t, "applied", rec.Header().Get("X-Middleware"))
+}
+

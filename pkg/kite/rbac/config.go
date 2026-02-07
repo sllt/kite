@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gorilla/mux"
 	"go.opentelemetry.io/otel/trace"
 	"gopkg.in/yaml.v3"
 
@@ -25,13 +24,13 @@ var (
 	ErrEndpointMissingPermissions = errors.New("endpoint must specify requiredPermissions (or be public)")
 
 	// errWildcardPatternNotSupported is returned when a wildcard pattern is used.
-	errWildcardPatternNotSupported = errors.New("wildcard pattern '/*' is not supported, use mux patterns instead")
+	errWildcardPatternNotSupported = errors.New("wildcard pattern '/*' is not supported, use URL parameter patterns instead")
 
 	// errRegexPatternNotSupported is returned when an old regex pattern is used.
-	errRegexPatternNotSupported = errors.New("regex pattern '^...$' is not supported, use mux patterns instead")
+	errRegexPatternNotSupported = errors.New("regex pattern '^...$' is not supported, use URL parameter patterns instead")
 
 	// errRegexIndicatorNotSupported is returned when regex indicators are used outside variable constraints.
-	errRegexIndicatorNotSupported = errors.New("regex pattern is not supported, use mux patterns instead")
+	errRegexIndicatorNotSupported = errors.New("regex pattern is not supported, use URL parameter patterns instead")
 )
 
 // RoleDefinition defines a role with its permissions and inheritance.
@@ -53,7 +52,7 @@ type RoleDefinition struct {
 // Pure config-based: only route&method->permission mapping is supported.
 // No direct route to role mapping - all authorization is permission-based.
 type EndpointMapping struct {
-	// Path is the route path pattern using gorilla/mux syntax.
+	// Path is the route path pattern using URL parameter syntax.
 	// Examples:
 	//   - "/api/users" (exact match)
 	//   - "/api/users/{id}" (matches any single segment)
@@ -61,7 +60,7 @@ type EndpointMapping struct {
 	//   - "/api/{resource}" (single-level wildcard: matches /api/users, /api/posts)
 	//   - "/api/{path:.*}" (multi-level wildcard: matches /api/users/123, /api/posts/comments)
 	//   - "/api/{category}/posts" (middle variable: matches /api/tech/posts, /api/news/posts)
-	// Only mux-style patterns are supported. Wildcards (/*) and regex (^...$) are not supported.
+	// Only URL parameter patterns are supported. Wildcards (/*) and regex (^...$) are not supported.
 	Path string `json:"path,omitempty" yaml:"path,omitempty"`
 
 	// Methods is a list of HTTP methods (GET, POST, PUT, DELETE, PATCH, etc.)
@@ -124,7 +123,6 @@ type Config struct {
 	endpointPermissionMap map[string][]string         `json:"-" yaml:"-"` // Key: "METHOD:/path", Value: []permissions
 	publicEndpointsMap    map[string]bool             `json:"-" yaml:"-"` // Key: "METHOD:/path", Value: true if public
 	endpointMap           map[string]*EndpointMapping `json:"-" yaml:"-"` // Key: "METHOD:/path", Value: endpoint object
-	muxRouter             *mux.Router                 `json:"-" yaml:"-"` // Used for mux pattern matching
 }
 
 // LoadPermissions loads RBAC configuration from a JSON or YAML file.
@@ -158,10 +156,6 @@ func LoadPermissions(path string, logger datasource.Logger, metrics infra.Metric
 	config.Logger = logger
 	config.Metrics = metrics
 	config.Tracer = tracer
-
-	// Initialize mux router for pattern matching
-	// Use StrictSlash(false) to match the application router's behavior
-	config.muxRouter = mux.NewRouter().StrictSlash(false)
 
 	// Validate config before processing
 	if err := config.validate(); err != nil {
@@ -275,8 +269,6 @@ func (c *Config) initializeMaps() {
 	c.endpointPermissionMap = make(map[string][]string)
 	c.publicEndpointsMap = make(map[string]bool)
 	c.endpointMap = make(map[string]*EndpointMapping)
-	// Use StrictSlash(false) to match the application router's behavior
-	c.muxRouter = mux.NewRouter().StrictSlash(false)
 }
 
 // buildRolePermissionsMap builds the role permissions map from Roles.
@@ -466,8 +458,8 @@ func (c *Config) checkPatternMatch(methodUpper, path string) (permissions []stri
 }
 
 // matchesKey checks if a key matches the given method and path.
-// Keys are built by buildEndpointKey which uses Path (may contain mux patterns).
-// Uses mux Route.Match() for mux patterns, exact match for non-pattern paths.
+// Keys are built by buildEndpointKey which uses Path (may contain URL parameter patterns).
+// Uses chi router matching for URL parameter patterns, exact match for non-pattern paths.
 func (c *Config) matchesKey(key, methodUpper, path string) bool {
 	if !strings.HasPrefix(key, methodUpper+":") {
 		return false
@@ -480,6 +472,6 @@ func (c *Config) matchesKey(key, methodUpper, path string) bool {
 		return pattern == path
 	}
 
-	// For mux patterns, use Route.Match() from endpoint_matcher
-	return matchMuxPattern(pattern, methodUpper, path, c.muxRouter)
+	// For URL parameter patterns, use chi router matching from endpoint_matcher
+	return matchMuxPattern(pattern, methodUpper, path)
 }

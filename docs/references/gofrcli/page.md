@@ -1,4 +1,4 @@
-# GoFR Command Line Interface
+# Kite Command Line Interface
 
 Managing repetitive tasks and maintaining consistency across large-scale applications is challenging!
 
@@ -120,7 +120,7 @@ For more examples, see the [using-migrations](https://github.com/kite-dev/kite/t
 ```
 ### Generated Files
 **Server**
-- ```{serviceName}_gofr.go (auto-generated; do not modify)```
+- ```{serviceName}_kite.go (auto-generated; do not modify)```
 - ```{serviceName}_server.go (example structure below)```
 
 ### Example Usage
@@ -136,7 +136,7 @@ import (
 
 // Register the gRPC service in your app using the following code in your main.go:
 //
-// service.Register{ServiceName}ServerWithGofr(app, &server.{ServiceName}Server{})
+// service.Register{ServiceName}ServerWithKite(app, &server.{ServiceName}Server{})
 //
 // {ServiceName}Server defines the gRPC server implementation.
 // Customize the struct with required dependencies and fields as needed.

@@ -2,6 +2,7 @@ package kite
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
@@ -13,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -32,7 +33,9 @@ var (
 
 func createTestContext(method, path, id string, body []byte, cont *infra.Container) *Context {
 	testReq := httptest.NewRequest(method, path+"/"+id, bytes.NewBuffer(body))
-	testReq = mux.SetURLVars(testReq, map[string]string{"id": id})
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", id)
+	testReq = testReq.WithContext(context.WithValue(testReq.Context(), chi.RouteCtxKey, rctx))
 	testReq.Header.Set("Content-Type", "application/json")
 	kiteReq := kiteHTTP.NewRequest(testReq)
 
@@ -546,6 +549,13 @@ func Test_DeleteHandler(t *testing.T) {
 		tableName:  "user_entity",
 	}
 
+	eCustom := entity{
+		name:       "productEntity",
+		entityType: nil,
+		primaryKey: "product_id",
+		tableName:  "product_entity",
+	}
+
 	dialectCases := []struct {
 		dialect       string
 		expectedQuery string
@@ -563,6 +573,7 @@ func Test_DeleteHandler(t *testing.T) {
 	type testCase struct {
 		desc         string
 		id           string
+		entity       *entity
 		mockResp     driver.Result
 		mockErr      error
 		expectedErr  error
@@ -574,6 +585,7 @@ func Test_DeleteHandler(t *testing.T) {
 			{
 				desc:         "success case",
 				id:           "1",
+				entity:       &e,
 				mockResp:     sqlmock.NewResult(1, 1),
 				mockErr:      nil,
 				expectedErr:  nil,
@@ -582,6 +594,7 @@ func Test_DeleteHandler(t *testing.T) {
 			{
 				desc:         "SQL error case",
 				id:           "2",
+				entity:       &e,
 				mockResp:     nil,
 				mockErr:      errTest,
 				expectedErr:  errTest,
@@ -590,6 +603,7 @@ func Test_DeleteHandler(t *testing.T) {
 			{
 				desc:         "no rows affected",
 				id:           "3",
+				entity:       &e,
 				mockResp:     sqlmock.NewResult(0, 0),
 				mockErr:      nil,
 				expectedErr:  errEntityNotFound,
@@ -603,12 +617,46 @@ func Test_DeleteHandler(t *testing.T) {
 				mocks.SQL.ExpectDialect().WillReturnString(dc.dialect)
 				mocks.SQL.ExpectExec(dc.expectedQuery).WithArgs(tc.id).WillReturnResult(tc.mockResp).WillReturnError(tc.mockErr)
 
-				resp, err := e.Delete(ctx)
+				resp, err := tc.entity.Delete(ctx)
 
 				assert.Equal(t, tc.expectedResp, resp, "TEST[%d], Failed.\n%s", i, tc.desc)
 
 				assert.Equal(t, tc.expectedErr, err, "TEST[%d], Failed.\n%s", i, tc.desc)
 			})
 		}
+	}
+
+	// Test with custom primary key
+	customDialectCases := []struct {
+		dialect       string
+		expectedQuery string
+	}{
+		{
+			dialect:       "mysql",
+			expectedQuery: "DELETE FROM `product_entity` WHERE `product_id`=?",
+		},
+		{
+			dialect:       "postgres",
+			expectedQuery: `DELETE FROM "product_entity" WHERE "product_id"=$1`,
+		},
+	}
+
+	for _, dc := range customDialectCases {
+		t.Run(dc.dialect+" custom primary key", func(t *testing.T) {
+			testReq := httptest.NewRequest(http.MethodDelete, "/product/P123", nil)
+			rctx := chi.NewRouteContext()
+			rctx.URLParams.Add("product_id", "P123")
+			testReq = testReq.WithContext(context.WithValue(testReq.Context(), chi.RouteCtxKey, rctx))
+			kiteReq := kiteHTTP.NewRequest(testReq)
+			ctx := newContext(kiteHTTP.NewResponder(httptest.NewRecorder(), http.MethodDelete), kiteReq, c)
+
+			mocks.SQL.ExpectDialect().WillReturnString(dc.dialect)
+			mocks.SQL.ExpectExec(dc.expectedQuery).WithArgs("P123").WillReturnResult(sqlmock.NewResult(1, 1)).WillReturnError(nil)
+
+			resp, err := eCustom.Delete(ctx)
+
+			assert.Equal(t, "productEntity successfully deleted with id: P123", resp)
+			assert.NoError(t, err)
+		})
 	}
 }

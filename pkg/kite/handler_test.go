@@ -40,15 +40,15 @@ func TestHandler_ServeHTTP(t *testing.T) {
 		body       string
 	}{
 		{"method is get, data is nil and error is nil", http.MethodGet, nil, nil, http.StatusOK,
-			`{}`},
+			`{"code":0,"data":null,"message":"ok"}`},
 		{"method is get, data is mil, error is not nil", http.MethodGet, nil, errTest, http.StatusInternalServerError,
-			`{"error":{"message":"some error"}}`},
+			`{"code":-1,"data":null,"message":"some error"}`},
 		{"method is get, data is mil, error is http error", http.MethodGet, nil, kiteHTTP.ErrorEntityNotFound{}, http.StatusNotFound,
-			`{"error":{"message":"No entity found with : "}}`},
+			`{"code":404,"data":null,"message":"No entity found with : "}`},
 		{"method is post, data is nil and error is nil", http.MethodPost, "Created", nil, http.StatusCreated,
-			`{"data":"Created"}`},
+			`{"code":0,"data":"Created","message":"ok"}`},
 		{"method is delete, data is nil and error is nil", http.MethodDelete, nil, nil, http.StatusNoContent,
-			`{}`},
+			`{"code":0,"data":null,"message":"ok"}`},
 	}
 
 	for i, tc := range testCases {
@@ -464,6 +464,5 @@ func TestIntegration_ServerTimeout(t *testing.T) {
 	err = json.Unmarshal(body, &errorResponse)
 	require.NoError(t, err)
 
-	errorObj := errorResponse["error"].(map[string]any)
-	assert.Equal(t, "request timed out", errorObj["message"])
+	assert.Equal(t, "request timed out", errorResponse["message"])
 }

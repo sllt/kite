@@ -50,5 +50,5 @@ func (a *App) EnableRBAC(configPath ...string) {
 
 	// Apply middleware using the config
 	middlewareFunc := rbac.Middleware(config)
-	a.UseMiddleware(middlewareFunc)
+	a.Use(middlewareFunc)
 }

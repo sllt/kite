@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 )
 
 type metrics interface {
@@ -26,7 +26,15 @@ func Metrics(metrics metrics) func(inner http.Handler) http.Handler {
 
 			srw := &StatusResponseWriter{ResponseWriter: w}
 
-			path, _ := mux.CurrentRoute(r).GetPathTemplate()
+			inner.ServeHTTP(srw, r)
+
+			// Read route pattern AFTER handler execution — chi populates RouteContext during routing
+			var path string
+
+			rctx := chi.RouteContext(r.Context())
+			if rctx != nil {
+				path = rctx.RoutePattern()
+			}
 
 			ext := strings.ToLower(filepath.Ext(r.URL.Path))
 			switch ext {
@@ -34,21 +42,16 @@ func Metrics(metrics metrics) func(inner http.Handler) http.Handler {
 				path = r.URL.Path
 			}
 
-			if path == "/" || strings.HasPrefix(path, "/static") {
+			if path == "" || path == "/" || strings.HasPrefix(path, "/static") {
 				path = r.URL.Path
 			}
 
 			path = strings.TrimSuffix(path, "/")
 
-			// this has to be called in the end so that status code is populated
-			defer func(res *StatusResponseWriter, req *http.Request) {
-				duration := time.Since(start)
+			duration := time.Since(start)
 
-				metrics.RecordHistogram(context.Background(), "app_http_response", duration.Seconds(),
-					"path", path, "method", req.Method, "status", fmt.Sprintf("%d", res.status))
-			}(srw, r)
-
-			inner.ServeHTTP(srw, r)
+			metrics.RecordHistogram(context.Background(), "app_http_response", duration.Seconds(),
+				"path", path, "method", r.Method, "status", fmt.Sprintf("%d", srw.status))
 		})
 	}
 }

@@ -71,6 +71,31 @@ func Test_EnvSuccess_AppEnv_Override(t *testing.T) {
 	assert.Equal(t, "localhost:2001", env.Get("DB_URL"), "TEST Failed.\n godotenv success")
 }
 
+func Test_EnvSuccess_AppEnv_InDotEnvFile(t *testing.T) {
+	clearAllEnv()
+
+	// Test that APP_ENV defined in .env file triggers override file loading
+	envData := map[string]string{
+		"APP_ENV": "staging",
+		"DB_URL":  "localhost:5432",
+	}
+
+	dir := t.TempDir()
+
+	// Create .env file with APP_ENV=staging
+	createEnvFile(t, dir, ".env", envData)
+
+	// Create .staging.env override file
+	createEnvFile(t, dir, ".staging.env", map[string]string{"DB_URL": "staging-db:3306"})
+
+	logger := logging.NewMockLogger(logging.DEBUG)
+
+	env := NewEnvFile(dir, logger)
+
+	assert.Equal(t, "staging", env.Get("APP_ENV"), "APP_ENV should be loaded from .env file")
+	assert.Equal(t, "staging-db:3306", env.Get("DB_URL"), "DB_URL should be overridden by .staging.env file")
+}
+
 func Test_EnvSuccess_Local_Override(t *testing.T) {
 	clearAllEnv()
 

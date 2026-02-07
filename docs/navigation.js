@@ -82,7 +82,7 @@ export const navigation = [
             {
                 title: 'Authentication',
                 href: '/docs/advanced-guide/authentication',
-                desc: "Implement various authentication methods to secure your GoFR application and protect sensitive endpoints across HTTP and gRPC."
+                desc: "Implement various authentication methods to secure your Kite application and protect sensitive endpoints across HTTP and gRPC."
             },
             {
                 title: 'Role-Based Access Control (RBAC)',
@@ -257,12 +257,12 @@ export const navigation = [
             {
                 title: 'Context',
                 href: '/docs/references/context',
-                desc: "Discover the GoFR context, an injected object that simplifies request-specific data handling for HTTP, gRPC, and Pub/Sub calls. Learn how it extends Go's context, providing easy access to dependencies like databases, loggers, and HTTP clients. Explore features for reading HTTP requests, binding data, and accessing query and path parameters efficiently, all while reducing application complexity."
+                desc: "Discover the Kite context, an injected object that simplifies request-specific data handling for HTTP, gRPC, and Pub/Sub calls. Learn how it extends Go's context, providing easy access to dependencies like databases, loggers, and HTTP clients. Explore features for reading HTTP requests, binding data, and accessing query and path parameters efficiently, all while reducing application complexity."
             },
             {
                 title: 'Configs',
                 href: '/docs/references/configs',
-                desc: "Learn how to manage configuration settings in your GoFR applications, including default values for environment variables. This section provides a comprehensive list of all available configurations to streamline your setup."
+                desc: "Learn how to manage configuration settings in your Kite applications, including default values for environment variables. This section provides a comprehensive list of all available configurations to streamline your setup."
             },
             {
                 title: 'Testing',

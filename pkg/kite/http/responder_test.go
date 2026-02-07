@@ -250,7 +250,6 @@ func (e CustomBusinessError) Error() string   { return e.Msg }
 func (e CustomBusinessError) StatusCode() int { return e.HTTPStatus }
 func (e CustomBusinessError) Code() int       { return e.BusinessCode }
 
-
 func TestRespondWithApplicationJSON(t *testing.T) {
 	sampleData := map[string]string{"message": "Hello World"}
 	sampleError := ErrorInvalidRoute{}
@@ -582,6 +581,139 @@ func TestResponder_XMLFileTemplate_ErrorStatusCodes(t *testing.T) {
 	for i, tc := range tests {
 		recorder := httptest.NewRecorder()
 		r := NewResponder(recorder, http.MethodGet)
+
+		r.Respond(tc.data, tc.err)
+
+		assert.Equal(t, tc.expectedCode, recorder.Code, "TEST[%d] Failed: %s", i, tc.desc)
+	}
+}
+
+func TestResponder_CustomStatusCode_Success(t *testing.T) {
+	tests := []struct {
+		desc         string
+		data         any
+		expectedCode int
+	}{
+		{
+			desc: "raw response should use custom status code",
+			data: resTypes.Raw{
+				Data:       map[string]string{"status": "ok"},
+				StatusCode: http.StatusOK,
+			},
+			expectedCode: http.StatusOK,
+		},
+		{
+			desc: "xml response should use custom status code",
+			data: resTypes.XML{
+				Content:    []byte(`<Response><Status>OK</Status></Response>`),
+				StatusCode: http.StatusOK,
+			},
+			expectedCode: http.StatusOK,
+		},
+		{
+			desc: "file response should use custom status code",
+			data: resTypes.File{
+				ContentType: "text/plain",
+				Content:     []byte("ok"),
+				StatusCode:  http.StatusOK,
+			},
+			expectedCode: http.StatusOK,
+		},
+	}
+
+	for i, tc := range tests {
+		recorder := httptest.NewRecorder()
+		r := NewResponder(recorder, http.MethodPost)
+
+		r.Respond(tc.data, nil)
+
+		assert.Equal(t, tc.expectedCode, recorder.Code, "TEST[%d] Failed: %s", i, tc.desc)
+	}
+}
+
+func TestResponder_CustomStatusCode_InvalidFallback(t *testing.T) {
+	tests := []struct {
+		desc         string
+		data         any
+		expectedCode int
+	}{
+		{
+			desc: "raw response should fall back to default status when custom code is invalid",
+			data: resTypes.Raw{
+				Data:       map[string]string{"status": "ok"},
+				StatusCode: 99,
+			},
+			expectedCode: http.StatusCreated,
+		},
+		{
+			desc: "xml response should fall back to default status when custom code is invalid",
+			data: resTypes.XML{
+				Content:    []byte(`<Response><Status>OK</Status></Response>`),
+				StatusCode: 99,
+			},
+			expectedCode: http.StatusCreated,
+		},
+		{
+			desc: "file response should fall back to default status when custom code is invalid",
+			data: resTypes.File{
+				ContentType: "text/plain",
+				Content:     []byte("ok"),
+				StatusCode:  99,
+			},
+			expectedCode: http.StatusCreated,
+		},
+	}
+
+	for i, tc := range tests {
+		recorder := httptest.NewRecorder()
+		r := NewResponder(recorder, http.MethodPost)
+
+		r.Respond(tc.data, nil)
+
+		assert.Equal(t, tc.expectedCode, recorder.Code, "TEST[%d] Failed: %s", i, tc.desc)
+	}
+}
+
+func TestResponder_CustomStatusCode_IgnoredWhenError(t *testing.T) {
+	tests := []struct {
+		desc         string
+		data         any
+		err          error
+		expectedCode int
+	}{
+		{
+			desc: "raw response should still use error status code",
+			data: resTypes.Raw{
+				Data:       map[string]string{"status": "error"},
+				StatusCode: http.StatusOK,
+			},
+			err:          ErrorEntityNotFound{Name: "id", Value: "123"},
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			desc: "xml response should still use error status code",
+			data: resTypes.XML{
+				Content:    []byte(`<Response><Error>Not Found</Error></Response>`),
+				StatusCode: http.StatusOK,
+			},
+			err:          ErrorEntityNotFound{Name: "id", Value: "123"},
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			desc: "file response should still use error status code",
+			data: resTypes.File{
+				ContentType: "text/plain",
+				Content:     []byte("error"),
+				StatusCode:  http.StatusOK,
+			},
+			err:          ErrorEntityNotFound{Name: "id", Value: "123"},
+			expectedCode: http.StatusNotFound,
+		},
+	}
+
+	for i, tc := range tests {
+		recorder := httptest.NewRecorder()
+		r := NewResponder(recorder, http.MethodPost)
 
 		r.Respond(tc.data, tc.err)
 

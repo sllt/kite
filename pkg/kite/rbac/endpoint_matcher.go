@@ -4,11 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
+	"net/http/httptest"
 	"os"
 	"strings"
 
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 )
 
 const (
@@ -79,34 +79,54 @@ func isMuxPattern(pattern string) bool {
 	return strings.Contains(pattern, "{") && strings.Contains(pattern, "}")
 }
 
-// matchMuxPattern uses mux Route.Match() to test if a path matches a mux pattern.
-// Creates a temporary mux Route and uses Route.Match() to test the pattern.
-// Handles all mux pattern types: {id}, {id:[0-9]+}, {path:.*}, etc.
-func matchMuxPattern(pattern, method, path string, router *mux.Router) bool {
-	if router == nil {
-		return false
-	}
+// matchMuxPattern uses a chi router to test if a path matches a URL parameter pattern.
+// Creates a temporary chi router and checks if the route matches.
+// Handles pattern types: {id}, {id:[0-9]+}, etc.
+// Converts gorilla/mux multi-level patterns {path:.*} to chi wildcard syntax /*
+func matchMuxPattern(pattern, method, path string) bool {
+	matched := false
 
-	// Create a temporary route with the pattern
-	route := router.NewRoute().Path(pattern)
+	// Convert gorilla/mux multi-level pattern {path:.*} to chi wildcard /*
+	// This handles patterns like /api/{path:.*} -> /api/*
+	chiPattern := convertMuxPatternToChi(pattern)
 
-	// If method is specified, add it to the route
+	r := chi.NewRouter()
+	r.HandleFunc(chiPattern, func(w http.ResponseWriter, r *http.Request) {
+		matched = true
+	})
+
+	req := httptest.NewRequest(http.MethodGet, path, http.NoBody)
 	if method != "" {
-		route = route.Methods(method)
+		req.Method = method
 	}
 
-	// Create a mock request for matching
-	req := &http.Request{
-		Method: method,
-		URL: &url.URL{
-			Path: path,
-		},
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	return matched
+}
+
+// convertMuxPatternToChi converts gorilla/mux patterns to chi patterns.
+// Main conversion: {varname:.*} -> /* (multi-level wildcard)
+// Other patterns like {id} and {id:[0-9]+} are compatible between mux and chi.
+func convertMuxPatternToChi(pattern string) string {
+	// Replace {varname:.*} with /* for multi-level wildcards
+	// This regex matches {anything:.*} and replaces with /*
+	if strings.Contains(pattern, ":.*}") {
+		// Find the last occurrence of {varname:.*}
+		start := strings.LastIndex(pattern, "{")
+		if start != -1 {
+			end := strings.Index(pattern[start:], "}")
+			if end != -1 && strings.Contains(pattern[start:start+end], ":.*") {
+				// Replace from the / before { to the end with /*
+				beforeBrace := strings.LastIndex(pattern[:start], "/")
+				if beforeBrace != -1 {
+					return pattern[:beforeBrace] + "/*"
+				}
+			}
+		}
 	}
-
-	// Use Route.Match() to test if the request matches the pattern
-	var match mux.RouteMatch
-
-	return route.Match(req, &match)
+	return pattern
 }
 
 // validateMuxPattern validates mux pattern syntax.
@@ -134,7 +154,7 @@ func validateMuxPattern(pattern string) error {
 
 // matchesEndpointPattern checks if the route matches the endpoint pattern.
 // Method matching is handled separately in matchEndpoint before this function is called.
-// Uses mux Route.Match() for mux patterns, exact match for non-pattern paths.
+// Uses chi router matching for URL parameter patterns, exact match for non-pattern paths.
 func matchesEndpointPattern(endpoint *EndpointMapping, route string, config *Config) bool {
 	if endpoint.Path == "" {
 		return false
@@ -147,9 +167,9 @@ func matchesEndpointPattern(endpoint *EndpointMapping, route string, config *Con
 		return pattern == route
 	}
 
-	// Use mux Route.Match() for patterns
+	// Use chi router matching for patterns
 	// Method is handled separately, so pass empty string here
-	return matchMuxPattern(pattern, "", route, config.muxRouter)
+	return matchMuxPattern(pattern, "", route)
 }
 
 // checkEndpointAuthorization checks if the user's role is authorized for the endpoint.

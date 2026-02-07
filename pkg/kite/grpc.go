@@ -18,6 +18,11 @@ import (
 	kite_grpc "github.com/sllt/kite/pkg/kite/grpc"
 )
 
+type pendingService struct {
+	desc *grpc.ServiceDesc
+	impl any
+}
+
 type grpcServer struct {
 	server             *grpc.Server
 	interceptors       []grpc.UnaryServerInterceptor
@@ -25,6 +30,8 @@ type grpcServer struct {
 	options            []grpc.ServerOption
 	port               int
 	config             config.Config
+	serverCreated      bool
+	pendingServices    []pendingService
 }
 
 var (
@@ -53,6 +60,11 @@ func (a *App) AddGRPCServerOptions(grpcOpts ...grpc.ServerOption) {
 		return
 	}
 
+	if a.grpcServer.serverCreated {
+		a.container.Logger.Error("cannot add server options after gRPC server has been created - call this before RegisterService or Run")
+		return
+	}
+
 	a.container.Logger.Debugf("adding %d gRPC server options", len(grpcOpts))
 	a.grpcServer.options = append(a.grpcServer.options, grpcOpts...)
 }
@@ -72,6 +84,11 @@ func (a *App) AddGRPCUnaryInterceptors(interceptors ...grpc.UnaryServerIntercept
 		return
 	}
 
+	if a.grpcServer.serverCreated {
+		a.container.Logger.Error("cannot add interceptors after gRPC server has been created - call this before RegisterService or Run")
+		return
+	}
+
 	a.container.Logger.Debugf("adding %d valid unary interceptors", len(interceptors))
 	a.grpcServer.interceptors = append(a.grpcServer.interceptors, interceptors...)
 }
@@ -79,6 +96,11 @@ func (a *App) AddGRPCUnaryInterceptors(interceptors ...grpc.UnaryServerIntercept
 func (a *App) AddGRPCServerStreamInterceptors(interceptors ...grpc.StreamServerInterceptor) {
 	if len(interceptors) == 0 {
 		a.container.Logger.Debug("no stream interceptors provided")
+		return
+	}
+
+	if a.grpcServer.serverCreated {
+		a.container.Logger.Error("cannot add stream interceptors after gRPC server has been created - call this before RegisterService or Run")
 		return
 	}
 
@@ -119,6 +141,10 @@ func registerGRPCMetrics(c *infra.Container) {
 }
 
 func (g *grpcServer) createServer() error {
+	if g.serverCreated {
+		return nil
+	}
+
 	interceptorOption := grpc.ChainUnaryInterceptor(g.interceptors...)
 	streamOpt := grpc.ChainStreamInterceptor(g.streamInterceptors...)
 	g.options = append(g.options, interceptorOption, streamOpt)
@@ -133,6 +159,8 @@ func (g *grpcServer) createServer() error {
 		reflection.Register(g.server)
 	}
 
+	g.serverCreated = true
+
 	return nil
 }
 
@@ -144,6 +172,21 @@ func (g *grpcServer) Run(c *infra.Container) {
 
 			return
 		}
+
+		// Register all pending services after server creation
+		for _, pending := range g.pendingServices {
+			c.Logger.Infof("registering pending gRPC Service: %s", pending.desc.ServiceName)
+			g.server.RegisterService(pending.desc, pending.impl)
+
+			err := injectContainer(pending.impl, c)
+			if err != nil {
+				c.Logger.Fatalf("failed to inject container into gRPC service %s: %v", pending.desc.ServiceName, err)
+			}
+
+			c.Metrics().IncrementCounter(context.Background(), "grpc_services_registered_total")
+			c.Logger.Infof("successfully registered gRPC service: %s", pending.desc.ServiceName)
+		}
+		g.pendingServices = nil
 	}
 
 	if !isPortAvailable(g.port) {
@@ -198,25 +241,15 @@ func (g *grpcServer) Shutdown(ctx context.Context) error {
 
 // RegisterService adds a gRPC service to the Kite application.
 func (a *App) RegisterService(desc *grpc.ServiceDesc, impl any) {
-	if !a.grpcRegistered {
-		if err := a.grpcServer.createServer(); err != nil {
-			a.container.Logger.Errorf("failed to create gRPC server for service %s: %v", desc.ServiceName, err)
-			return
-		}
-	}
+	a.container.Logger.Infof("queuing gRPC Service for registration: %s", desc.ServiceName)
 
-	a.container.Logger.Infof("registering gRPC Service: %s", desc.ServiceName)
-	a.grpcServer.server.RegisterService(desc, impl)
-
-	a.container.Metrics().IncrementCounter(context.Background(), "grpc_services_registered_total")
-
-	err := injectContainer(impl, a.container)
-	if err != nil {
-		a.container.Logger.Fatalf("failed to inject container into gRPC service %s: %v", desc.ServiceName, err)
-	}
+	a.grpcServer.pendingServices = append(a.grpcServer.pendingServices, pendingService{
+		desc: desc,
+		impl: impl,
+	})
 
 	a.grpcRegistered = true
-	a.container.Logger.Infof("successfully registered gRPC service: %s", desc.ServiceName)
+	a.container.Logger.Infof("gRPC service %s queued for registration", desc.ServiceName)
 }
 
 func injectContainer(impl any, c *infra.Container) error {
