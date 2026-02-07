@@ -357,7 +357,7 @@ func Test_SQLRetryConnectionInfoLog(t *testing.T) {
 		mockMetrics := NewMockMetrics(ctrl)
 		mockConfig := config.NewMockConfig(map[string]string{
 			"DB_DIALECT":  "postgres",
-			"DB_HOST":     "host",
+			"DB_HOST":     "127.0.0.1",
 			"DB_USER":     "user",
 			"DB_PASSWORD": "password",
 			"DB_PORT":     "3201",
@@ -371,7 +371,7 @@ func Test_SQLRetryConnectionInfoLog(t *testing.T) {
 
 		_ = NewSQL(mockConfig, mockLogger, mockMetrics)
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	})
 
 	assert.Contains(t, logs, "retrying SQL database connection")

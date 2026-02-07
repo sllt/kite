@@ -15,7 +15,6 @@ import (
 
 	"github.com/sllt/kite/pkg/kite/config"
 	"github.com/sllt/kite/pkg/kite/infra"
-	kiteHTTP "github.com/sllt/kite/pkg/kite/http"
 	"github.com/sllt/kite/pkg/kite/logging"
 	"github.com/sllt/kite/pkg/kite/metrics"
 	"github.com/sllt/kite/pkg/kite/migration"
@@ -147,6 +146,10 @@ func (a *App) httpServerSetup() {
 	// Add OpenAPI/Swagger routes if openapi.json exists
 	a.checkAndAddOpenAPIDocumentation()
 
+	// Compile the route registry: walks the GroupNode tree and registers
+	// all routes and middleware onto the chi router.
+	a.httpServer.registry.compile(a.httpServer.router.Mux(), a.container, a.getRequestTimeout())
+
 	for dirName, endpoint := range a.httpServer.staticFiles {
 		a.httpServer.router.AddStaticFiles(a.Logger(), endpoint, dirName)
 	}
@@ -274,9 +277,25 @@ func (a *App) Subscribe(topic string, handler SubscribeFunc) {
 	a.subscriptionManager.subscriptions[topic] = handler
 }
 
-// UseMiddleware is a setter method for adding user defined custom middleware to Kite's router.
-func (a *App) UseMiddleware(middlewares ...kiteHTTP.Middleware) {
-	a.httpServer.router.UseMiddleware(middlewares...)
+// Use registers HTTP middleware (func(http.Handler) http.Handler) at the global level.
+// These run at the HTTP layer before the kite Context is created.
+func (a *App) Use(middlewares ...func(http.Handler) http.Handler) {
+	if !a.canMutateRoutes("register HTTP middlewares") {
+		return
+	}
+
+	a.httpServer.registry.root.httpMWs = append(a.httpServer.registry.root.httpMWs, middlewares...)
+}
+
+// UseMiddleware registers KiteMiddleware that runs at the application layer with *Context access.
+// This is a BREAKING CHANGE: the signature changed from func(http.Handler) http.Handler
+// to func(next Handler) Handler (KiteMiddleware).
+func (a *App) UseMiddleware(middlewares ...KiteMiddleware) {
+	if !a.canMutateRoutes("register Kite middlewares") {
+		return
+	}
+
+	a.httpServer.registry.root.kiteMWs = append(a.httpServer.registry.root.kiteMWs, middlewares...)
 }
 
 // UseMiddlewareWithContainer adds a middleware that has access to the container
@@ -287,10 +306,60 @@ func (a *App) UseMiddleware(middlewares ...kiteHTTP.Middleware) {
 // Deprecated: UseMiddlewareWithContainer will be removed in a future release.
 // Please use the [*App.UseMiddleware] method that does not depend on the infra.
 func (a *App) UseMiddlewareWithContainer(middlewareHandler func(c *infra.Container, handler http.Handler) http.Handler) {
-	a.httpServer.router.Use(func(h http.Handler) http.Handler {
-		// Wrap the provided handler `h` with the middleware function `middlewareHandler`
+	a.Use(func(h http.Handler) http.Handler {
 		return middlewareHandler(a.container, h)
 	})
+}
+
+// Group creates or gets a route group with the given prefix and returns it.
+// An optional callback can be provided for backward-compatible inline registration.
+func (a *App) Group(prefix string, fns ...func(sub *RouteGroup)) *RouteGroup {
+	if !a.canMutateRoutes("create route groups") {
+		return a.rootRouteGroup()
+	}
+
+	a.ensureHTTPAvailable()
+
+	validCallbacks := make([]func(sub *RouteGroup), 0, len(fns))
+	for _, fn := range fns {
+		if fn == nil {
+			a.container.Logger.Error("route group callback cannot be nil")
+			continue
+		}
+
+		validCallbacks = append(validCallbacks, fn)
+	}
+
+	// Preserve old behavior for explicit nil callback: log and don't create groups.
+	if len(fns) > 0 && len(validCallbacks) == 0 {
+		return a.rootRouteGroup()
+	}
+
+	normalizedPrefix := normalizeGroupPrefix(prefix)
+	if normalizedPrefix == "" {
+		root := a.rootRouteGroup()
+		for _, fn := range validCallbacks {
+			fn(root)
+		}
+
+		return root
+	}
+
+	child := a.httpServer.registry.root.getOrCreateChild(normalizedPrefix)
+	sub := &RouteGroup{node: child, app: a}
+	for _, fn := range validCallbacks {
+		fn(sub)
+	}
+
+	return sub
+}
+
+func (a *App) rootRouteGroup() *RouteGroup {
+	if a == nil || a.httpServer == nil || a.httpServer.registry == nil {
+		return &RouteGroup{}
+	}
+
+	return &RouteGroup{node: a.httpServer.registry.root, app: a}
 }
 
 // AddCronJob registers a cron job to the cron table.

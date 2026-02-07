@@ -60,6 +60,11 @@ func (a *App) AddGRPCServerOptions(grpcOpts ...grpc.ServerOption) {
 		return
 	}
 
+	if a.grpcServer.serverCreated {
+		a.container.Logger.Error("cannot add server options after gRPC server has been created - call this before RegisterService or Run")
+		return
+	}
+
 	a.container.Logger.Debugf("adding %d gRPC server options", len(grpcOpts))
 	a.grpcServer.options = append(a.grpcServer.options, grpcOpts...)
 }
@@ -91,6 +96,11 @@ func (a *App) AddGRPCUnaryInterceptors(interceptors ...grpc.UnaryServerIntercept
 func (a *App) AddGRPCServerStreamInterceptors(interceptors ...grpc.StreamServerInterceptor) {
 	if len(interceptors) == 0 {
 		a.container.Logger.Debug("no stream interceptors provided")
+		return
+	}
+
+	if a.grpcServer.serverCreated {
+		a.container.Logger.Error("cannot add stream interceptors after gRPC server has been created - call this before RegisterService or Run")
 		return
 	}
 

@@ -177,7 +177,7 @@ func InitDBResolver(app *kite.App, cfg *Config) error {
 	provider := NewDBResolverProvider(app, cfg)
 
 	//  Add middleware to inject HTTP context.
-	app.UseMiddleware(createHTTPMiddleware())
+	app.Use(createHTTPMiddleware())
 
 	//  Add resolver (calls Connect() internally).
 	app.AddDBResolver(provider)

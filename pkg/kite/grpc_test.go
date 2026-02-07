@@ -510,6 +510,52 @@ func TestApp_InterceptorAfterServerCreation(t *testing.T) {
 	assert.Len(t, g.interceptors, initialCount, "interceptor should not be added after server creation")
 }
 
+func TestApp_StreamInterceptorAfterServerCreation(t *testing.T) {
+	c, _, g := setupTestGRPCServer(t, 9999, false)
+
+	app := New()
+	app.container = c
+	app.grpcServer = g
+
+	// Create server first
+	err := g.createServer()
+	require.NoError(t, err)
+	assert.True(t, g.serverCreated)
+
+	initialCount := len(g.streamInterceptors)
+
+	// Try to add stream interceptors after server creation - should be rejected
+	testStreamInterceptor := func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		return handler(srv, ss)
+	}
+	app.AddGRPCServerStreamInterceptors(testStreamInterceptor)
+
+	// Stream interceptor should not be added
+	assert.Len(t, g.streamInterceptors, initialCount,
+		"stream interceptor should not be added after server creation")
+}
+
+func TestApp_ServerOptionsAfterServerCreation(t *testing.T) {
+	c, _, g := setupTestGRPCServer(t, 9999, false)
+
+	app := New()
+	app.container = c
+	app.grpcServer = g
+
+	// Create server first
+	err := g.createServer()
+	require.NoError(t, err)
+	assert.True(t, g.serverCreated)
+
+	initialCount := len(g.options)
+
+	// Try to add options after server creation - should be rejected
+	app.AddGRPCServerOptions(grpc.ConnectionTimeout(5 * time.Second))
+
+	// Option should not be added
+	assert.Len(t, g.options, initialCount, "server option should not be added after server creation")
+}
+
 func TestApp_AuthAfterServerCreation(t *testing.T) {
 	c, _, g := setupTestGRPCServer(t, 9999, false)
 

@@ -16,6 +16,7 @@ import (
 
 type httpServer struct {
 	router      *kiteHTTP.Router
+	registry    *RouteRegistry
 	port        int
 	ws          *websocket.Manager
 	srv         *http.Server
@@ -42,9 +43,11 @@ func newHTTPServer(c *infra.Container, port int, middlewareConfigs middleware.Co
 	)
 
 	return &httpServer{
-		router: r,
-		port:   port,
-		ws:     wsManager,
+		router:      r,
+		registry:    newRouteRegistry(),
+		port:        port,
+		ws:          wsManager,
+		staticFiles: make(map[string]string),
 	}
 }
 

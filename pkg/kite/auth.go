@@ -129,7 +129,7 @@ func (a *App) EnableOAuth(jwksEndpoint string,
 func (a *App) addAuthMiddleware(httpMW func(http.Handler) http.Handler,
 	grpcUnary grpc.UnaryServerInterceptor, grpcStream grpc.StreamServerInterceptor) {
 	if a.httpServer != nil {
-		a.httpServer.router.Use(httpMW)
+		a.Use(httpMW)
 	}
 
 	if a.grpcServer != nil {

@@ -54,6 +54,7 @@ func TestRequest_WithOneArg(t *testing.T) {
 	req := &Request{
 		flags:  make(map[string]bool),
 		params: make(map[string]string),
+		args:   make([]string, 0),
 	}
 
 	assert.Equal(t, req, r, "TEST Failed.\n Hostname did not match.")

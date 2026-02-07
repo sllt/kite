@@ -31,22 +31,47 @@ func (a *App) PATCH(pattern string, handler Handler) {
 }
 
 func (a *App) add(method, pattern string, h Handler) {
+	if !a.canMutateRoutes("register routes") {
+		return
+	}
+
+	a.ensureHTTPAvailable()
+
+	a.httpServer.registry.root.routes = append(a.httpServer.registry.root.routes, RouteDef{
+		Method:  method,
+		Pattern: pattern,
+		Handler: h,
+	})
+}
+
+func (a *App) ensureHTTPAvailable() {
 	if !a.httpRegistered && !isPortAvailable(a.httpServer.port) {
 		a.container.Logger.Fatalf("http port %d is blocked or unreachable", a.httpServer.port)
 	}
 
 	a.httpRegistered = true
+}
 
+func (a *App) canMutateRoutes(action string) bool {
+	if a.httpServer == nil || a.httpServer.registry == nil {
+		return false
+	}
+
+	if a.httpServer.registry.compiled {
+		a.container.Logger.Errorf("cannot %s after routes have been compiled; register all routes and middleware before Run", action)
+		return false
+	}
+
+	return true
+}
+
+func (a *App) getRequestTimeout() time.Duration {
 	reqTimeout, err := strconv.Atoi(a.Config.Get("REQUEST_TIMEOUT"))
 	if (err != nil && a.Config.Get("REQUEST_TIMEOUT") != "") || reqTimeout < 0 {
 		reqTimeout = 0
 	}
 
-	a.httpServer.router.Add(method, pattern, handler{
-		function:       h,
-		container:      a.container,
-		requestTimeout: time.Duration(reqTimeout) * time.Second,
-	})
+	return time.Duration(reqTimeout) * time.Second
 }
 
 // AddRESTHandlers creates and registers CRUD routes for the given struct, the struct should always be passed by reference.
