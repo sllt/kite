@@ -17,10 +17,10 @@ import (
 	time "time"
 
 	redis "github.com/redis/go-redis/v9"
-	gomock "go.uber.org/mock/gomock"
 	datasource "github.com/sllt/kite/pkg/kite/datasource"
 	pubsub "github.com/sllt/kite/pkg/kite/datasource/pubsub"
 	sql0 "github.com/sllt/kite/pkg/kite/datasource/sql"
+	gomock "go.uber.org/mock/gomock"
 )
 
 // MockDB is a mock of DB interface.
@@ -238,13 +238,15 @@ func (mr *MockDBMockRecorder) QueryRowContext(ctx, query any, args ...any) *gomo
 }
 
 // Select mocks base method.
-func (m *MockDB) Select(ctx context.Context, data any, query string, args ...any) {
+func (m *MockDB) Select(ctx context.Context, data any, query string, args ...any) error {
 	m.ctrl.T.Helper()
 	varargs := []any{ctx, data, query}
 	for _, a := range args {
 		varargs = append(varargs, a)
 	}
-	m.ctrl.Call(m, "Select", varargs...)
+	ret := m.ctrl.Call(m, "Select", varargs...)
+	ret0, _ := ret[0].(error)
+	return ret0
 }
 
 // Select indicates an expected call of Select.
@@ -8795,7 +8797,6 @@ func (mr *MockRedisMockRecorder) VRange(ctx, key, start, end, count any) *gomock
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "VRange", reflect.TypeOf((*MockRedis)(nil).VRange), ctx, key, start, end, count)
 }
-
 
 // MockCassandra is a mock of Cassandra interface.
 type MockCassandra struct {

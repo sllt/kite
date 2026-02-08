@@ -24,7 +24,7 @@ type DB interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	Prepare(query string) (*sql.Stmt, error)
 	Begin() (*kiteSQL.Tx, error)
-	Select(ctx context.Context, data any, query string, args ...any)
+	Select(ctx context.Context, data any, query string, args ...any) error
 	HealthCheck() *datasource.Health
 	Dialect() string
 	Close() error

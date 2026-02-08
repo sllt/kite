@@ -6,6 +6,7 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -31,6 +32,11 @@ type Log struct {
 	Duration int64  `json:"duration"`
 	Args     []any  `json:"args,omitempty"`
 }
+
+var (
+	errSelectDataNotPointer = errors.New("data is not a pointer")
+	errSelectUnsupported    = errors.New("unsupported select destination type")
+)
 
 func (l *Log) PrettyPrint(writer io.Writer) {
 	fmt.Fprintf(writer, "\u001B[38;5;8m%-32s \u001B[38;5;24m%-6s\u001B[0m %8d\u001B[38;5;8mµs\u001B[0m %s\n",
@@ -146,6 +152,11 @@ func (t *Tx) Query(query string, args ...any) (*sql.Rows, error) {
 	return t.Tx.QueryContext(context.Background(), query, args...)
 }
 
+func (t *Tx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	defer t.sendOperationStats(time.Now(), "TxQueryContext", query, args...)
+	return t.Tx.QueryContext(ctx, query, args...)
+}
+
 func (t *Tx) QueryRow(query string, args ...any) *sql.Row {
 	defer t.sendOperationStats(time.Now(), "TxQueryRow", query, args...)
 	return t.Tx.QueryRowContext(context.Background(), query, args...)
@@ -181,15 +192,14 @@ func (t *Tx) Rollback() error {
 	return t.Tx.Rollback()
 }
 
-// Select runs a query with args and binds the result of the query to the data.
-// data should be a point to a slice, struct or any type. Slice will return multiple
-// objects whereas struct will return a single object.
+// Select runs a query with args and binds the result of the query to data.
+// data should be a pointer to a slice or struct.
 //
-// Example Usages:
+// Example:
 //
 //  1. Get multiple rows with only one column
 //     ids := make([]int, 0)
-//     db.Select(ctx, &ids, "select id from users")
+//     err := db.Select(ctx, &ids, "select id from users")
 //
 //  2. Get a single object from database
 //     type user struct {
@@ -198,7 +208,7 @@ func (t *Tx) Rollback() error {
 //     Image string
 //     }
 //     u := user{}
-//     db.Select(ctx, &u, "select * from users where id=?", 1)
+//     err := db.Select(ctx, &u, "select * from users where id=?", 1)
 //
 //  3. Get array of objects from multiple rows
 //     type user struct {
@@ -207,85 +217,130 @@ func (t *Tx) Rollback() error {
 //     Image string `db:"image_url"`
 //     }
 //     users := []user{}
-//     db.Select(ctx, &users, "select * from users")
+//     err := db.Select(ctx, &users, "select * from users")
 //
-//nolint:exhaustive // We just want to take care of slice and struct in this case.
-func (d *DB) Select(ctx context.Context, data any, query string, args ...any) {
-	// If context is done, it is not needed
-	if ctx.Err() != nil {
-		return
+//nolint:exhaustive // We only support slice and struct destinations.
+func (d *DB) Select(ctx context.Context, data any, query string, args ...any) error {
+	return selectData(ctx, d.logger, d.QueryContext, data, query, args...)
+}
+
+// Select executes query using the active transaction and binds rows into data.
+func (t *Tx) Select(ctx context.Context, data any, query string, args ...any) error {
+	return selectData(ctx, t.logger, t.QueryContext, data, query, args...)
+}
+
+type queryFunc func(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+
+//nolint:exhaustive // We only support slice and struct destinations.
+func selectData(ctx context.Context, logger datasource.Logger, queryContext queryFunc, data any, query string, args ...any) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
-	// First confirm that what we got in v is a pointer else it won't be settable
+	// Destination must be settable so callers can read scanned results.
 	rvo := reflect.ValueOf(data)
-	if rvo.Kind() != reflect.Ptr {
-		d.logger.Error("we did not get a pointer. data is not settable.")
-		return
+	if !rvo.IsValid() || rvo.Kind() != reflect.Ptr || rvo.IsNil() {
+		if logger != nil {
+			logger.Error("we did not get a pointer. data is not settable.")
+		}
+
+		return errSelectDataNotPointer
 	}
 
-	// Deference the pointer to the underlying element, if the underlying element is a slice, multiple rows are expected.
-	// If the underlying element is a struct, one row is expected.
 	rv := rvo.Elem()
 
 	switch rv.Kind() {
 	case reflect.Slice:
-		d.selectSlice(ctx, query, args, rvo, rv)
-
+		return selectSlice(ctx, logger, queryContext, query, args, rvo, rv)
 	case reflect.Struct:
-		d.selectStruct(ctx, query, args, rv)
-
+		return selectStruct(ctx, logger, queryContext, query, args, rv)
 	default:
-		d.logger.Debugf("a pointer to %v was not expected.", rv.Kind().String())
+		if logger != nil {
+			logger.Debugf("a pointer to %v was not expected.", rv.Kind().String())
+		}
+
+		return fmt.Errorf("%w: %s", errSelectUnsupported, rv.Kind())
 	}
 }
 
-func (d *DB) selectSlice(ctx context.Context, query string, args []any, rvo, rv reflect.Value) {
-	rows, err := d.QueryContext(ctx, query, args...)
+func selectSlice(ctx context.Context, logger datasource.Logger, queryContext queryFunc, query string, args []any, rvo, rv reflect.Value) error {
+	rows, err := queryContext(ctx, query, args...)
 	if err != nil {
-		d.logger.Errorf("error running query: %v", err)
-		return
+		if logger != nil {
+			logger.Errorf("error running query: %v", err)
+		}
+
+		return err
 	}
+
+	defer rows.Close()
 
 	for rows.Next() {
 		val := reflect.New(rv.Type().Elem())
 
 		if rv.Type().Elem().Kind() == reflect.Struct {
-			d.rowsToStruct(rows, val)
-		} else {
-			_ = rows.Scan(val.Interface())
+			if err := rowsToStruct(rows, val); err != nil {
+				return err
+			}
+		} else if err := rows.Scan(val.Interface()); err != nil {
+			return err
 		}
 
 		rv = reflect.Append(rv, val.Elem())
 	}
 
-	if rows.Err() != nil {
-		d.logger.Errorf("error parsing rows : %v", err)
-		return
+	if err := rows.Err(); err != nil {
+		if logger != nil {
+			logger.Errorf("error parsing rows : %v", err)
+		}
+
+		return err
 	}
 
 	if rvo.Elem().CanSet() {
 		rvo.Elem().Set(rv)
 	}
+
+	return nil
 }
 
-func (d *DB) selectStruct(ctx context.Context, query string, args []any, rv reflect.Value) {
-	rows, err := d.QueryContext(ctx, query, args...)
+func selectStruct(ctx context.Context, logger datasource.Logger, queryContext queryFunc, query string, args []any, rv reflect.Value) error {
+	rows, err := queryContext(ctx, query, args...)
 	if err != nil {
-		d.logger.Errorf("error running query: %v", err)
-		return
+		if logger != nil {
+			logger.Errorf("error running query: %v", err)
+		}
+
+		return err
 	}
+
+	defer rows.Close()
+
+	rowFound := false
 
 	for rows.Next() {
-		d.rowsToStruct(rows, rv)
+		rowFound = true
+		if err := rowsToStruct(rows, rv); err != nil {
+			return err
+		}
 	}
 
-	if rows.Err() != nil {
-		d.logger.Errorf("error parsing rows : %v", err)
-		return
+	if err := rows.Err(); err != nil {
+		if logger != nil {
+			logger.Errorf("error parsing rows : %v", err)
+		}
+
+		return err
 	}
+
+	if !rowFound {
+		return sql.ErrNoRows
+	}
+
+	return nil
 }
 
-func (*DB) rowsToStruct(rows *sql.Rows, vo reflect.Value) {
+func rowsToStruct(rows *sql.Rows, vo reflect.Value) error {
 	v := vo
 	if vo.Kind() == reflect.Ptr {
 		v = vo.Elem()
@@ -310,7 +365,10 @@ func (*DB) rowsToStruct(rows *sql.Rows, vo reflect.Value) {
 	}
 
 	fields := []any{}
-	columns, _ := rows.Columns()
+	columns, err := rows.Columns()
+	if err != nil {
+		return err
+	}
 
 	for _, c := range columns {
 		if i, ok := fieldNameIndex[c]; ok {
@@ -322,11 +380,15 @@ func (*DB) rowsToStruct(rows *sql.Rows, vo reflect.Value) {
 		}
 	}
 
-	_ = rows.Scan(fields...)
+	if err := rows.Scan(fields...); err != nil {
+		return err
+	}
 
 	if vo.CanSet() {
 		vo.Set(v)
 	}
+
+	return nil
 }
 
 var matchFirstCap = regexp.MustCompile("(.)([A-Z][a-z]+)")

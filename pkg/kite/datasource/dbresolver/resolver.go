@@ -10,11 +10,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
-	"github.com/sllt/kite/pkg/kite/infra"
 	"github.com/sllt/kite/pkg/kite/datasource"
 	kiteSQL "github.com/sllt/kite/pkg/kite/datasource/sql"
+	"github.com/sllt/kite/pkg/kite/infra"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Constants for strategies and intervals.
@@ -430,7 +430,7 @@ func (r *Resolver) ExecContext(ctx context.Context, query string, args ...any) (
 }
 
 // Select routes to replica for reads, primary for writes.
-func (r *Resolver) Select(ctx context.Context, data any, query string, args ...any) {
+func (r *Resolver) Select(ctx context.Context, data any, query string, args ...any) error {
 	start := time.Now()
 
 	r.stats.totalQueries.Add(1)
@@ -443,23 +443,31 @@ func (r *Resolver) Select(ctx context.Context, data any, query string, args ...a
 		wrapper := r.selectHealthyReplica()
 
 		if wrapper != nil {
-			r.stats.replicaReads.Add(1)
-			wrapper.breaker.recordSuccess()
-			wrapper.db.Select(tracedCtx, data, query, args...)
+			err := wrapper.db.Select(tracedCtx, data, query, args...)
+			if err == nil {
+				r.stats.replicaReads.Add(1)
+				wrapper.breaker.recordSuccess()
 
-			r.recordStats(start, "select", "replica", span, true, &wrapper.index)
+				r.recordStats(start, "select", "replica", span, true, &wrapper.index)
 
-			return
+				return nil
+			}
+
+			wrapper.breaker.recordFailure()
+			r.stats.replicaFailures.Add(1)
+			r.recordStats(start, "select", "replica-failed", span, true, &wrapper.index)
+
+			return err
 		}
 
 		r.stats.replicaFailures.Add(1)
 	}
 
 	r.stats.primaryWrites.Add(1)
-
-	r.primary.Select(tracedCtx, data, query, args...)
-
+	err := r.primary.Select(tracedCtx, data, query, args...)
 	r.recordStats(start, "select", "primary", span, false, nil)
+
+	return err
 }
 
 // Prepare always routes to primary (consistency).

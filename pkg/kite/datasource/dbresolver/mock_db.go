@@ -14,10 +14,10 @@ import (
 	sql "database/sql"
 	reflect "reflect"
 
-	gomock "go.uber.org/mock/gomock"
-	"github.com/sllt/kite/pkg/kite/infra"
 	datasource "github.com/sllt/kite/pkg/kite/datasource"
 	sql0 "github.com/sllt/kite/pkg/kite/datasource/sql"
+	"github.com/sllt/kite/pkg/kite/infra"
+	gomock "go.uber.org/mock/gomock"
 )
 
 // MockDBResolverProvider is a mock of DBResolverProvider interface.
@@ -105,7 +105,6 @@ func (mr *MockDBResolverProviderMockRecorder) UseTracer(tracer any) *gomock.Call
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UseTracer", reflect.TypeOf((*MockDBResolverProvider)(nil).UseTracer), tracer)
 }
-
 
 // MockDB is a mock of DB interface.
 type MockDB struct {
@@ -322,13 +321,15 @@ func (mr *MockDBMockRecorder) QueryRowContext(ctx, query any, args ...any) *gomo
 }
 
 // Select mocks base method.
-func (m *MockDB) Select(ctx context.Context, data any, query string, args ...any) {
+func (m *MockDB) Select(ctx context.Context, data any, query string, args ...any) error {
 	m.ctrl.T.Helper()
 	varargs := []any{ctx, data, query}
 	for _, a := range args {
 		varargs = append(varargs, a)
 	}
-	m.ctrl.Call(m, "Select", varargs...)
+	ret := m.ctrl.Call(m, "Select", varargs...)
+	ret0, _ := ret[0].(error)
+	return ret0
 }
 
 // Select indicates an expected call of Select.

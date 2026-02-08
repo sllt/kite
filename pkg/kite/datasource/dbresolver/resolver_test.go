@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sllt/kite/pkg/kite/datasource"
+	kiteSQL "github.com/sllt/kite/pkg/kite/datasource/sql"
+	"github.com/sllt/kite/pkg/kite/infra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.uber.org/mock/gomock"
-	"github.com/sllt/kite/pkg/kite/infra"
-	"github.com/sllt/kite/pkg/kite/datasource"
-	kiteSQL "github.com/sllt/kite/pkg/kite/datasource/sql"
 )
 
 var errTestReplicaFailed = errors.New("replica connection failed")
@@ -346,9 +346,10 @@ func TestResolver_Select_ReadGoesToReplica(t *testing.T) {
 	ctx := WithHTTPMethod(t.Context(), "GET")
 
 	mocks.Strategy.EXPECT().Next(2).Return(0)
-	mocks.MockReplicas[0].EXPECT().Select(gomock.Any(), data, readQuery, args[0])
+	mocks.MockReplicas[0].EXPECT().Select(gomock.Any(), data, readQuery, args[0]).Return(nil)
 
-	mocks.Resolver.Select(ctx, data, readQuery, args[0])
+	err := mocks.Resolver.Select(ctx, data, readQuery, args[0])
+	require.NoError(t, err)
 }
 
 func TestResolver_Select_WriteGoesToPrimary(t *testing.T) {
@@ -359,9 +360,10 @@ func TestResolver_Select_WriteGoesToPrimary(t *testing.T) {
 	writeQuery := "INSERT INTO users (name) VALUES (?) RETURNING id"
 	args := []any{"test_user"}
 
-	mocks.Primary.EXPECT().Select(gomock.Any(), data, writeQuery, args[0])
+	mocks.Primary.EXPECT().Select(gomock.Any(), data, writeQuery, args[0]).Return(nil)
 
-	mocks.Resolver.Select(t.Context(), data, writeQuery, args[0])
+	err := mocks.Resolver.Select(t.Context(), data, writeQuery, args[0])
+	require.NoError(t, err)
 }
 
 func TestResolver_Prepare_GoesToPrimary(t *testing.T) {

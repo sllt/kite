@@ -3,6 +3,7 @@ package infra
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -50,10 +51,10 @@ func emptyExpectation(m *sqlMockDB) {
 	}
 }
 
-func (m sqlMockDB) Select(_ context.Context, value any, query string, args ...any) {
+func (m sqlMockDB) Select(_ context.Context, value any, query string, args ...any) error {
 	if len(m.queryWithArgs) == 0 {
 		m.logger.Errorf("did not expect any calls for Select with query: %q", query)
-		return
+		return fmt.Errorf("did not expect any calls for Select with query: %q", query)
 	}
 
 	defer emptyExpectation(&m)
@@ -64,12 +65,12 @@ func (m sqlMockDB) Select(_ context.Context, value any, query string, args ...an
 	valueType := reflect.TypeOf(value)
 	if valueType.Kind() != reflect.Ptr {
 		m.logger.Errorf("expected a pointer type: %q", value)
-		return
+		return fmt.Errorf("expected a pointer type: %T", value)
 	}
 
 	if m.queryWithArgs[0].value == nil {
 		m.logger.Errorf("received different expectations: %q", query)
-		return
+		return fmt.Errorf("received different expectations: %q", query)
 	}
 
 	v := reflect.ValueOf(value)
@@ -81,20 +82,22 @@ func (m sqlMockDB) Select(_ context.Context, value any, query string, args ...an
 
 	if expectedText != query {
 		m.logger.Errorf("expected query: %q, actual query: %q", query, expectedText)
-		return
+		return fmt.Errorf("expected query: %q, actual query: %q", expectedText, query)
 	}
 
 	if len(args) != len(expectedArgs) {
 		m.logger.Errorf("expected %d args, actual %d", len(expectedArgs), len(args))
-		return
+		return fmt.Errorf("expected %d args, actual %d", len(expectedArgs), len(args))
 	}
 
 	for i := range args {
 		if args[i] != expectedArgs[i] {
 			m.logger.Errorf("expected arg %d, actual arg %d", args[i], expectedArgs[i])
-			return
+			return fmt.Errorf("expected arg %v, actual arg %v", expectedArgs[i], args[i])
 		}
 	}
+
+	return nil
 }
 
 func (m sqlMockDB) HealthCheck() *datasource.Health {
