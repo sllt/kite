@@ -28,6 +28,7 @@ const (
 
 var errStartupHookPanic = errors.New("startup hook panicked")
 var errStopHookPanic = errors.New("stop hook panicked")
+var errAppAlreadyStopped = errors.New("application has already been stopped")
 
 // App is the main application in the Kite framework.
 type App struct {
@@ -52,9 +53,12 @@ type App struct {
 	onStopHooks         []func(ctx *Context) error
 	backgroundWorkers   []backgroundWorker
 
-	runtimeCtx    context.Context
-	runtimeCancel context.CancelCauseFunc
-	runtimeTasks  sync.WaitGroup
+	runtimeCtx     context.Context
+	runtimeCancel  context.CancelCauseFunc
+	runtimeTasks   sync.WaitGroup
+	runtimeMu      sync.Mutex
+	runtimeStarted bool
+	runtimeStopped bool
 }
 
 func (a *App) runOnStartHooks(ctx context.Context) error {
@@ -115,9 +119,32 @@ func (a *App) runLifecycleHook(name string, idx int, hook func(ctx *Context) err
 	return hookErr
 }
 
-// Shutdown stops the service(s) and close the application.
-// It shuts down the HTTP, gRPC, Metrics servers and closes the container's active connections to datasources.
+// Stop gracefully stops the application runtime.
+// It is safe to call Stop multiple times; repeated calls after the first successful stop are no-ops.
+func (a *App) Stop(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	a.runtimeMu.Lock()
+	if a.runtimeStopped {
+		a.runtimeMu.Unlock()
+		return nil
+	}
+	a.runtimeStopped = true
+	a.runtimeMu.Unlock()
+
+	return a.shutdown(ctx)
+}
+
+// Shutdown stops the service(s) and closes the application.
+// It is kept for backward compatibility; new embedded integrations should prefer Stop.
 func (a *App) Shutdown(ctx context.Context) error {
+	return a.Stop(ctx)
+}
+
+// shutdown stops HTTP, gRPC, Metrics servers and closes the container's active connections to datasources.
+func (a *App) shutdown(ctx context.Context) error {
 	a.requestShutdown(nil)
 
 	var err error
@@ -148,7 +175,9 @@ func (a *App) Shutdown(ctx context.Context) error {
 		return err
 	}
 
-	a.container.Logger.Info("Application shutdown complete")
+	if a.container != nil && a.container.Logger != nil {
+		a.container.Logger.Info("Application shutdown complete")
+	}
 
 	return err
 }

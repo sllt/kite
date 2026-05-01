@@ -14,8 +14,8 @@ import (
 	"google.golang.org/grpc/reflection"
 
 	"github.com/sllt/kite/pkg/kite/config"
-	"github.com/sllt/kite/pkg/kite/infra"
 	kite_grpc "github.com/sllt/kite/pkg/kite/grpc"
+	"github.com/sllt/kite/pkg/kite/infra"
 )
 
 type pendingService struct {
@@ -164,13 +164,25 @@ func (g *grpcServer) createServer() error {
 	return nil
 }
 
-func (g *grpcServer) Run(c *infra.Container) {
+func (g *grpcServer) Run(c *infra.Container) error {
+	err := g.start(c, func(err error) {
+		c.Logger.Errorf("error in gRPC server: %v", err)
+		c.Metrics().IncrementCounter(context.Background(), "grpc_server_errors_total")
+		c.Metrics().SetGauge("grpc_server_status", 0)
+	})
+	if err != nil {
+		c.Logger.Errorf("error in starting gRPC server: %v", err)
+	}
+
+	return err
+}
+
+func (g *grpcServer) start(c *infra.Container, onError func(error)) error {
 	if g.server == nil {
 		if err := g.createServer(); err != nil {
-			c.Logger.Fatalf("failed to create gRPC server: %v", err)
 			c.Metrics().IncrementCounter(context.Background(), "grpc_server_errors_total")
 
-			return
+			return fmt.Errorf("failed to create gRPC server: %w", err)
 		}
 
 		// Register all pending services after server creation
@@ -180,7 +192,8 @@ func (g *grpcServer) Run(c *infra.Container) {
 
 			err := injectContainer(pending.impl, c)
 			if err != nil {
-				c.Logger.Fatalf("failed to inject container into gRPC service %s: %v", pending.desc.ServiceName, err)
+				c.Metrics().IncrementCounter(context.Background(), "grpc_server_errors_total")
+				return fmt.Errorf("failed to inject container into gRPC service %s: %w", pending.desc.ServiceName, err)
 			}
 
 			c.Metrics().IncrementCounter(context.Background(), "grpc_services_registered_total")
@@ -190,11 +203,10 @@ func (g *grpcServer) Run(c *infra.Container) {
 	}
 
 	if !isPortAvailable(g.port) {
-		c.Logger.Fatalf("gRPC port %d is blocked or unreachable", g.port)
 		c.Metrics().IncrementCounter(context.Background(), "grpc_server_errors_total")
 		c.Metrics().SetGauge("grpc_server_status", 0)
 
-		return
+		return fmt.Errorf("gRPC port %d is blocked or unreachable", g.port)
 	}
 
 	addr := ":" + strconv.Itoa(g.port)
@@ -203,26 +215,26 @@ func (g *grpcServer) Run(c *infra.Container) {
 
 	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", addr)
 	if err != nil {
-		c.Logger.Errorf("error in starting gRPC server at %s: %s", addr, err)
 		c.Metrics().IncrementCounter(context.Background(), "grpc_server_errors_total")
 		c.Metrics().SetGauge("grpc_server_status", 0)
 
-		return
+		return fmt.Errorf("error in starting gRPC server at %s: %w", addr, err)
 	}
 
 	c.Metrics().SetGauge("grpc_server_status", 1)
 	c.Logger.Infof("gRPC server started successfully on %s", addr)
 
-	if err := g.server.Serve(listener); err != nil {
-		c.Logger.Errorf("error in starting gRPC server at %s: %s", addr, err)
-		c.Metrics().IncrementCounter(context.Background(), "grpc_server_errors_total")
+	go func() {
+		if err := g.server.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			onError(err)
+			return
+		}
+
+		c.Logger.Infof("gRPC server stopped on %s", addr)
 		c.Metrics().SetGauge("grpc_server_status", 0)
+	}()
 
-		return
-	}
-
-	c.Logger.Infof("gRPC server stopped on %s", addr)
-	c.Metrics().SetGauge("grpc_server_status", 0)
+	return nil
 }
 
 func (g *grpcServer) Shutdown(ctx context.Context) error {
@@ -233,7 +245,9 @@ func (g *grpcServer) Shutdown(ctx context.Context) error {
 
 		return nil
 	}, func() error {
-		g.server.Stop()
+		if g.server != nil {
+			g.server.Stop()
+		}
 
 		return nil
 	})

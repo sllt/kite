@@ -6,59 +6,153 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 )
 
 // Run starts the application. If it is an HTTP server, it will start the server.
 func (a *App) Run() {
-	if a.cmd != nil {
-		a.cmd.Run(a.container)
-	}
-
-	// Create a context that is canceled on receiving termination signals
+	// Create a context that is canceled on receiving termination signals.
 	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	ctx := a.initRuntime(signalCtx)
+	if err := a.RunContext(signalCtx); err != nil {
+		a.Logger().Errorf("Application stopped with error: %v", err)
+	}
+}
 
-	if !a.handleStartupHooks(ctx) {
-		a.requestShutdown(nil)
-		return
+// RunContext starts the application and blocks until ctx is canceled or a managed runtime component requests shutdown.
+func (a *App) RunContext(ctx context.Context) error {
+	if a.cmd != nil {
+		a.cmd.Run(a.container)
+		return nil
 	}
 
-	timeout, err := getShutdownTimeoutFromConfig(a.Config)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	if err := a.Start(ctx); err != nil {
+		return err
+	}
+
+	runtimeCtx := a.runtimeContext()
+	if runtimeCtx == nil {
+		return nil
+	}
+
+	<-runtimeCtx.Done()
+
+	timeout, err := a.shutdownTimeout()
 	if err != nil {
 		a.Logger().Errorf("error parsing value of shutdown timeout from config: %v. Setting default timeout of 30 sec.", err)
 	}
 
-	shutdownDone := a.startShutdownHandler(ctx, timeout)
-	a.startTelemetryIfEnabled()
-	a.startAllServers(ctx)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
 
-	if ctx.Err() == nil {
-		a.requestShutdown(nil)
+	if a.hasTelemetry() {
+		a.sendTelemetry(http.DefaultClient, false)
 	}
 
-	a.waitForShutdown(shutdownDone, timeout)
+	a.Logger().Infof("Shutting down server with a timeout of %v", timeout)
+
+	stopErr := a.Stop(shutdownCtx)
+	cause := context.Cause(runtimeCtx)
+	if cause == nil || errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+		return stopErr
+	}
+
+	return errors.Join(cause, stopErr)
 }
 
-// handleStartupHooks runs the startup hooks and returns false if the application should exit.
-func (a *App) handleStartupHooks(ctx context.Context) bool {
+// Start starts the application without installing signal handlers.
+// It returns after startup hooks and registered servers/workers have been started.
+func (a *App) Start(ctx context.Context) error {
+	if a.cmd != nil {
+		a.cmd.Run(a.container)
+		return nil
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	runtimeCtx, err := a.startRuntime(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := a.handleStartupHooks(runtimeCtx); err != nil {
+		a.requestShutdown(err)
+		return errors.Join(err, a.rollbackStart(ctx))
+	}
+
+	a.startTelemetryIfEnabled()
+
+	if err := a.startAllServers(runtimeCtx); err != nil {
+		a.requestShutdown(err)
+		return errors.Join(err, a.rollbackStart(ctx))
+	}
+
+	return nil
+}
+
+func (a *App) startRuntime(parent context.Context) (context.Context, error) {
+	a.runtimeMu.Lock()
+	defer a.runtimeMu.Unlock()
+
+	switch {
+	case a.runtimeStarted && !a.runtimeStopped:
+		return a.runtimeCtx, nil
+	case a.runtimeStopped:
+		return nil, errAppAlreadyStopped
+	}
+
+	ctx := a.initRuntime(parent)
+	a.runtimeStarted = true
+
+	return ctx, nil
+}
+
+func (a *App) runtimeContext() context.Context {
+	a.runtimeMu.Lock()
+	defer a.runtimeMu.Unlock()
+
+	return a.runtimeCtx
+}
+
+func (a *App) rollbackStart(parent context.Context) error {
+	timeout, err := a.shutdownTimeout()
+	if err != nil {
+		a.Logger().Errorf("error parsing value of shutdown timeout from config: %v. Setting default timeout of 30 sec.", err)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), timeout)
+	defer cancel()
+
+	return a.Stop(shutdownCtx)
+}
+
+func (a *App) shutdownTimeout() (time.Duration, error) {
+	return getShutdownTimeoutFromConfig(a.Config)
+}
+
+// handleStartupHooks runs the startup hooks and returns an error if the application should exit.
+func (a *App) handleStartupHooks(ctx context.Context) error {
 	if err := a.runOnStartHooks(ctx); err != nil {
 		if !errors.Is(err, context.Canceled) {
 			a.Logger().Errorf("Startup failed: %v", err)
 
-			return false
+			return err
 		}
 		// If the error is context.Canceled, do not exit; allow graceful shutdown.
 		a.Logger().Info("Startup canceled by context, shutting down gracefully.")
 
-		return false
+		return err
 	}
 
-	return true
+	return nil
 }
 
 // startShutdownHandler starts a goroutine to handle graceful shutdown.
@@ -98,67 +192,74 @@ func (a *App) startTelemetryIfEnabled() {
 }
 
 // startAllServers starts all registered servers concurrently.
-func (a *App) startAllServers(ctx context.Context) {
-	wg := sync.WaitGroup{}
+func (a *App) startAllServers(ctx context.Context) error {
+	var err error
 
-	a.startMetricsServer(&wg)
-	a.startHTTPServer(&wg)
-	a.startGRPCServer(&wg)
-	a.startSubscriptionManager(ctx, &wg)
-	a.startBackgroundWorkers(ctx, &wg)
+	err = errors.Join(err, a.startMetricsServer())
+	err = errors.Join(err, a.startHTTPServer())
+	err = errors.Join(err, a.startGRPCServer())
 
-	wg.Wait()
+	if err != nil {
+		return err
+	}
+
+	a.startSubscriptionManager(ctx, nil)
+	a.startBackgroundWorkers(ctx, nil)
+
+	return nil
 }
 
 // startMetricsServer starts the metrics server if configured.
-func (a *App) startMetricsServer(wg *sync.WaitGroup) {
+func (a *App) startMetricsServer() error {
 	// Start Metrics Server
 	// running metrics server before HTTP and gRPC
 	if a.metricServer != nil {
-		wg.Add(1)
-
-		go func(m *metricServer) {
-			defer wg.Done()
-
-			m.Run(a.container)
-		}(a.metricServer)
+		return a.metricServer.start(a.container, func(err error) {
+			a.Logger().Errorf("Metrics server failed: %v", err)
+			a.requestShutdown(err)
+		})
 	}
+
+	return nil
 }
 
 // startHTTPServer starts the HTTP server if registered.
-func (a *App) startHTTPServer(wg *sync.WaitGroup) {
+func (a *App) startHTTPServer() error {
 	if a.httpRegistered {
-		wg.Add(1)
 		a.httpServerSetup()
 
-		go func(s *httpServer) {
-			defer wg.Done()
-
-			s.run(a.container)
-		}(a.httpServer)
+		return a.httpServer.start(a.container, func(err error) {
+			a.Logger().Errorf("HTTP server failed: %v", err)
+			a.requestShutdown(err)
+		})
 	}
+
+	return nil
 }
 
 // startGRPCServer starts the gRPC server if registered.
-func (a *App) startGRPCServer(wg *sync.WaitGroup) {
+func (a *App) startGRPCServer() error {
 	if a.grpcRegistered {
-		wg.Add(1)
-
-		go func(s *grpcServer) {
-			defer wg.Done()
-
-			s.Run(a.container)
-		}(a.grpcServer)
+		return a.grpcServer.start(a.container, func(err error) {
+			a.Logger().Errorf("gRPC server failed: %v", err)
+			a.requestShutdown(err)
+		})
 	}
+
+	return nil
 }
 
 // startSubscriptionManager starts the subscription manager.
-func (a *App) startSubscriptionManager(ctx context.Context, wg *sync.WaitGroup) {
-	wg.Add(1)
+func (a *App) startSubscriptionManager(ctx context.Context, wg waitGroup) {
+	if wg != nil {
+		wg.Add(1)
+	}
 	a.runtimeTasks.Add(1)
 
 	go func() {
-		defer wg.Done()
+		if wg != nil {
+			defer wg.Done()
+		}
 		defer a.runtimeTasks.Done()
 
 		err := a.startSubscriptions(ctx)

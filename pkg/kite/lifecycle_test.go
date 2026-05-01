@@ -3,6 +3,9 @@ package kite
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -179,4 +182,111 @@ func TestAppShutdown_CancelsBackgroundWorkers(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected Shutdown to cancel background worker")
 	}
+}
+
+func TestAppStartStop_Idempotency(t *testing.T) {
+	t.Setenv("METRICS_PORT", "0")
+
+	app := New()
+
+	require.NoError(t, app.Start(t.Context()))
+	require.NoError(t, app.Start(t.Context()))
+	require.NoError(t, app.Stop(t.Context()))
+	require.NoError(t, app.Stop(t.Context()))
+	require.ErrorIs(t, app.Start(t.Context()), errAppAlreadyStopped)
+}
+
+func TestAppStart_OnStartFailureRollsBack(t *testing.T) {
+	t.Setenv("METRICS_PORT", "0")
+
+	app := New()
+	startErr := errors.New("startup failed")
+	onStopCalled := make(chan struct{})
+
+	app.OnStart(func(_ *Context) error {
+		return startErr
+	})
+	app.OnStop(func(_ *Context) error {
+		close(onStopCalled)
+		return nil
+	})
+
+	err := app.Start(t.Context())
+
+	require.ErrorIs(t, err, startErr)
+	select {
+	case <-onStopCalled:
+	case <-time.After(time.Second):
+		t.Fatal("expected OnStop to run during Start rollback")
+	}
+	require.ErrorIs(t, app.Start(t.Context()), errAppAlreadyStopped)
+}
+
+func TestAppStart_ReturnsGRPCListenFailure(t *testing.T) {
+	t.Setenv("METRICS_PORT", "0")
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	port := listener.Addr().(*net.TCPAddr).Port
+
+	app := New()
+	app.grpcRegistered = true
+	app.grpcServer.port = port
+
+	err = app.Start(t.Context())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "gRPC port")
+	require.NoError(t, app.Stop(t.Context()))
+}
+
+func TestAppStartStop_HTTPServer(t *testing.T) {
+	t.Setenv("METRICS_PORT", "0")
+
+	port := getFreeLifecyclePort(t)
+	t.Setenv("HTTP_PORT", strconv.Itoa(port))
+
+	app := New()
+	app.GET("/lifecycle", func(*Context) (any, error) {
+		return map[string]string{"status": "ok"}, nil
+	})
+
+	require.NoError(t, app.Start(t.Context()))
+	t.Cleanup(func() { _ = app.Stop(t.Context()) })
+
+	resp, err := http.Get("http://127.0.0.1:" + strconv.Itoa(port) + "/lifecycle")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NoError(t, app.Stop(t.Context()))
+	require.NoError(t, app.Stop(t.Context()))
+}
+
+func TestAppRunContext_ReturnsBackgroundWorkerError(t *testing.T) {
+	t.Setenv("METRICS_PORT", "0")
+
+	app := New()
+	app.Go("failing-worker", func(*Context) error {
+		return errBackgroundWorkerFailed
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	err := app.RunContext(ctx)
+
+	require.ErrorIs(t, err, errBackgroundWorkerFailed)
+}
+
+func getFreeLifecyclePort(t *testing.T) int {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	return listener.Addr().(*net.TCPAddr).Port
 }

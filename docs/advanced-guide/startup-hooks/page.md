@@ -8,19 +8,61 @@ This includes:
 - shutdown hooks during graceful shutdown
 - long-running background workers tied to the app lifecycle
 
+## Running the lifecycle
+
+For standalone applications, keep using `app.Run()`:
+
+```go
+app := kite.New()
+// register routes, hooks, workers...
+app.Run()
+```
+
+`Run()` installs OS signal handling and blocks until the app shuts down.
+
+For embedded hosts such as Fx, custom CLIs, or tests, use the composable lifecycle APIs:
+
+```go
+ctx := context.Background()
+
+if err := app.Start(ctx); err != nil {
+    return err
+}
+
+defer func() {
+    shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+
+    _ = app.Stop(shutdownCtx)
+}()
+```
+
+You can also let the caller control the runtime context:
+
+```go
+if err := app.RunContext(ctx); err != nil {
+    return err
+}
+```
+
+### Behavior
+
+- `Start(ctx)` runs `OnStart`, starts HTTP/gRPC/metrics servers, subscriptions, and background workers, then returns.
+- `RunContext(ctx)` calls `Start(ctx)`, blocks until the context is canceled or a managed worker/server requests shutdown, then calls `Stop(ctx)`.
+- `Stop(ctx)` gracefully shuts down servers, cron, runtime tasks, stop hooks, container resources, and metrics.
+- Server startup failures are returned from `Start` / `RunContext`.
+- `Stop` is idempotent; calling it more than once is safe.
+
 ## OnStart
 
 You can register a startup hook using the `a.OnStart()` method on your `app` instance.
 
 ## Usage
 
-The method accepts a function with the signature:
-
 The method accepts a function with the signature `func(ctx *kite.Context) error`.
 
 - The `*kite.Context` passed to the hook is fully initialized and provides access to all dependency-injection-managed services (e.g., `ctx.Container.SQL`, `ctx.Container.Redis`).
-- If any `OnStart` hook returns an error, the application will log the error and refuse to start.
-
+- If any `OnStart` hook returns an error, the application logs the error, rolls back startup with `Stop`, and returns the startup error.
 
 ### Example: Warming up a Cache
 

@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"time"
 
-	"github.com/sllt/kite/pkg/kite/infra"
 	kiteHTTP "github.com/sllt/kite/pkg/kite/http"
 	"github.com/sllt/kite/pkg/kite/http/middleware"
+	"github.com/sllt/kite/pkg/kite/infra"
 	"github.com/sllt/kite/pkg/kite/websocket"
 )
 
@@ -51,10 +52,21 @@ func newHTTPServer(c *infra.Container, port int, middlewareConfigs middleware.Co
 	}
 }
 
-func (s *httpServer) run(c *infra.Container) {
+func (s *httpServer) run(c *infra.Container) error {
+	err := s.start(c, func(err error) {
+		c.Errorf("error while listening to http server, err: %v", err)
+	})
+	if err != nil {
+		c.Errorf("error while starting http server, err: %v", err)
+	}
+
+	return err
+}
+
+func (s *httpServer) start(c *infra.Container, onError func(error)) error {
 	if s.srv != nil {
 		c.Logf("Server already running on port: %d", s.port)
-		return
+		return nil
 	}
 
 	c.Logf("Starting server on port: %d", s.port)
@@ -65,25 +77,34 @@ func (s *httpServer) run(c *infra.Container) {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	// If both certFile and keyFile are provided, validate and run HTTPS server
+	addr := fmt.Sprintf(":%d", s.port)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on HTTP address %s: %w", addr, err)
+	}
+
 	if s.certFile != "" && s.keyFile != "" {
 		if err := validateCertificateAndKeyFiles(s.certFile, s.keyFile); err != nil {
-			c.Error(err)
-			return
+			_ = listener.Close()
+			return err
 		}
 
-		// Start HTTPS server with TLS
-		if err := s.srv.ListenAndServeTLS(s.certFile, s.keyFile); err != nil {
-			c.Errorf("error while listening to https server, err: %v", err)
+		go func() {
+			if err := s.srv.ServeTLS(listener, s.certFile, s.keyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				onError(err)
+			}
+		}()
+
+		return nil
+	}
+
+	go func() {
+		if err := s.srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			onError(err)
 		}
+	}()
 
-		return
-	}
-
-	// If no certFile/keyFile is provided, run the HTTP server
-	if err := s.srv.ListenAndServe(); err != nil {
-		c.Errorf("error while listening to http server, err: %v", err)
-	}
+	return nil
 }
 
 func (s *httpServer) Shutdown(ctx context.Context) error {

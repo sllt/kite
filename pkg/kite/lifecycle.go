@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -24,6 +23,11 @@ type BackgroundFunc func(ctx *Context) error
 type backgroundWorker struct {
 	name string
 	fn   BackgroundFunc
+}
+
+type waitGroup interface {
+	Add(delta int)
+	Done()
 }
 
 // Go registers a long-running background worker managed by Kite's application lifecycle.
@@ -77,14 +81,18 @@ func (a *App) requestShutdown(cause error) {
 	}
 }
 
-func (a *App) startBackgroundWorkers(ctx context.Context, wg *sync.WaitGroup) {
+func (a *App) startBackgroundWorkers(ctx context.Context, wg waitGroup) {
 	for _, worker := range a.backgroundWorkers {
 		worker := worker
-		wg.Add(1)
+		if wg != nil {
+			wg.Add(1)
+		}
 		a.runtimeTasks.Add(1)
 
 		go func() {
-			defer wg.Done()
+			if wg != nil {
+				defer wg.Done()
+			}
 			defer a.runtimeTasks.Done()
 
 			a.runBackgroundWorker(ctx, worker)
