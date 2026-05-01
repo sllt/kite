@@ -33,6 +33,7 @@ type Crontab struct {
 	ticker    *time.Ticker
 	jobs      []*job
 	container *infra.Container
+	done      chan struct{}
 
 	mu sync.RWMutex
 }
@@ -64,11 +65,17 @@ func NewCron(cntnr *infra.Container) *Crontab {
 		ticker:    time.NewTicker(time.Second),
 		container: cntnr,
 		jobs:      make([]*job, 0),
+		done:      make(chan struct{}),
 	}
 
 	go func() {
-		for t := range c.ticker.C {
-			c.runScheduled(t)
+		for {
+			select {
+			case t := <-c.ticker.C:
+				c.runScheduled(t)
+			case <-c.done:
+				return
+			}
 		}
 	}()
 
@@ -96,8 +103,7 @@ func (j *job) run(cntnr *infra.Container) {
 		Start(context.Background(), j.name)
 	defer span.End()
 
-	c := newContext(nil, &noopRequest{}, cntnr)
-	c.Context = ctx
+	c := newContext(nil, noopRequest{ctx: ctx}, cntnr)
 
 	c.Infof("Starting cron job: %s", j.name)
 
@@ -131,6 +137,21 @@ func (c *Crontab) AddJob(schedule, jobName string, fn CronFunc) error {
 	return nil
 }
 
+// Stop prevents the cron scheduler from firing new jobs.
+func (c *Crontab) Stop() {
+	if c == nil || c.ticker == nil {
+		return
+	}
+
+	c.ticker.Stop()
+
+	select {
+	case <-c.done:
+	default:
+		close(c.done)
+	}
+}
+
 var errBadScheduleFormat = errors.New("schedule string must have five components like * * * * *")
 
 // errOutOfRange denotes the errors that occur when a range in schedule is out of scope for the particular time unit.
@@ -161,9 +182,14 @@ func (e errParsing) Error() string {
 // noopRequest is a non-operating implementation of Request interface
 // this is required to prevent panics while executing cron jobs.
 type noopRequest struct {
+	ctx context.Context
 }
 
-func (noopRequest) Context() context.Context {
+func (n noopRequest) Context() context.Context {
+	if n.ctx != nil {
+		return n.ctx
+	}
+
 	return context.Background()
 }
 

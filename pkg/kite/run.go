@@ -18,10 +18,13 @@ func (a *App) Run() {
 	}
 
 	// Create a context that is canceled on receiving termination signals
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	ctx := a.initRuntime(signalCtx)
+
 	if !a.handleStartupHooks(ctx) {
+		a.requestShutdown(nil)
 		return
 	}
 
@@ -30,9 +33,15 @@ func (a *App) Run() {
 		a.Logger().Errorf("error parsing value of shutdown timeout from config: %v. Setting default timeout of 30 sec.", err)
 	}
 
-	a.startShutdownHandler(ctx, timeout)
+	shutdownDone := a.startShutdownHandler(ctx, timeout)
 	a.startTelemetryIfEnabled()
 	a.startAllServers(ctx)
+
+	if ctx.Err() == nil {
+		a.requestShutdown(nil)
+	}
+
+	a.waitForShutdown(shutdownDone, timeout)
 }
 
 // handleStartupHooks runs the startup hooks and returns false if the application should exit.
@@ -53,14 +62,18 @@ func (a *App) handleStartupHooks(ctx context.Context) bool {
 }
 
 // startShutdownHandler starts a goroutine to handle graceful shutdown.
-func (a *App) startShutdownHandler(ctx context.Context, timeout time.Duration) {
+func (a *App) startShutdownHandler(ctx context.Context, timeout time.Duration) <-chan struct{} {
+	done := make(chan struct{})
+
 	// Goroutine to handle shutdown when context is canceled
 	go func() {
+		defer close(done)
+
 		<-ctx.Done()
 
 		// Create a shutdown context with a timeout
-		shutdownCtx, done := context.WithTimeout(context.WithoutCancel(ctx), timeout)
-		defer done()
+		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+		defer cancel()
 
 		if a.hasTelemetry() {
 			a.sendTelemetry(http.DefaultClient, false)
@@ -73,6 +86,8 @@ func (a *App) startShutdownHandler(ctx context.Context, timeout time.Duration) {
 			a.Logger().Debugf("Server shutdown failed: %v", shutdownErr)
 		}
 	}()
+
+	return done
 }
 
 // startTelemetryIfEnabled starts telemetry if it's enabled.
@@ -90,6 +105,7 @@ func (a *App) startAllServers(ctx context.Context) {
 	a.startHTTPServer(&wg)
 	a.startGRPCServer(&wg)
 	a.startSubscriptionManager(ctx, &wg)
+	a.startBackgroundWorkers(ctx, &wg)
 
 	wg.Wait()
 }
@@ -139,9 +155,11 @@ func (a *App) startGRPCServer(wg *sync.WaitGroup) {
 // startSubscriptionManager starts the subscription manager.
 func (a *App) startSubscriptionManager(ctx context.Context, wg *sync.WaitGroup) {
 	wg.Add(1)
+	a.runtimeTasks.Add(1)
 
 	go func() {
 		defer wg.Done()
+		defer a.runtimeTasks.Done()
 
 		err := a.startSubscriptions(ctx)
 		if err != nil {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"golang.org/x/sync/errgroup"
 
@@ -26,6 +27,7 @@ const (
 )
 
 var errStartupHookPanic = errors.New("startup hook panicked")
+var errStopHookPanic = errors.New("stop hook panicked")
 
 // App is the main application in the Kite framework.
 type App struct {
@@ -47,29 +49,19 @@ type App struct {
 
 	subscriptionManager SubscriptionManager
 	onStartHooks        []func(ctx *Context) error
+	onStopHooks         []func(ctx *Context) error
+	backgroundWorkers   []backgroundWorker
+
+	runtimeCtx    context.Context
+	runtimeCancel context.CancelCauseFunc
+	runtimeTasks  sync.WaitGroup
 }
 
 func (a *App) runOnStartHooks(ctx context.Context) error {
-	// Use the existing newContext function with noopRequest
-	kiteCtx := newContext(nil, noopRequest{}, a.container)
-
-	// Set the context for cancellation support
-	kiteCtx.Context = ctx
+	kiteCtx := newContext(nil, noopRequest{ctx: ctx}, a.container)
 
 	for i, hook := range a.onStartHooks {
-		// Add panic recovery to prevent entire application crash
-		var hookErr error
-
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					a.Logger().Errorf("OnStart hook %d panicked: %v", i, r)
-					hookErr = fmt.Errorf("hook %d: %w: %v", i, errStartupHookPanic, r)
-				}
-			}()
-
-			hookErr = hook(kiteCtx)
-		}()
+		hookErr := a.runLifecycleHook("OnStart", i, hook, kiteCtx, errStartupHookPanic)
 
 		if hookErr != nil {
 			a.Logger().Errorf("OnStart hook failed: %v", hookErr)
@@ -85,9 +77,49 @@ func (a *App) runOnStartHooks(ctx context.Context) error {
 	return nil
 }
 
+func (a *App) runOnStopHooks(ctx context.Context) error {
+	if len(a.onStopHooks) == 0 {
+		return nil
+	}
+
+	kiteCtx := newContext(nil, noopRequest{ctx: ctx}, a.container)
+	var err error
+
+	for i := len(a.onStopHooks) - 1; i >= 0; i-- {
+		if ctx.Err() != nil {
+			return errors.Join(err, ctx.Err())
+		}
+
+		hookErr := a.runLifecycleHook("OnStop", i, a.onStopHooks[i], kiteCtx, errStopHookPanic)
+		if hookErr != nil {
+			a.Logger().Errorf("OnStop hook failed: %v", hookErr)
+			err = errors.Join(err, hookErr)
+		}
+	}
+
+	return err
+}
+
+func (a *App) runLifecycleHook(name string, idx int, hook func(ctx *Context) error, ctx *Context, panicErr error) (hookErr error) {
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				a.Logger().Errorf("%s hook %d panicked: %v", name, idx, r)
+				hookErr = fmt.Errorf("hook %d: %w: %v", idx, panicErr, r)
+			}
+		}()
+
+		hookErr = hook(ctx)
+	}()
+
+	return hookErr
+}
+
 // Shutdown stops the service(s) and close the application.
 // It shuts down the HTTP, gRPC, Metrics servers and closes the container's active connections to datasources.
 func (a *App) Shutdown(ctx context.Context) error {
+	a.requestShutdown(nil)
+
 	var err error
 	if a.httpServer != nil {
 		err = errors.Join(err, a.httpServer.Shutdown(ctx))
@@ -96,6 +128,13 @@ func (a *App) Shutdown(ctx context.Context) error {
 	if a.grpcServer != nil {
 		err = errors.Join(err, a.grpcServer.Shutdown(ctx))
 	}
+
+	if a.cron != nil {
+		a.cron.Stop()
+	}
+
+	err = errors.Join(err, a.waitForRuntimeTasks(ctx))
+	err = errors.Join(err, a.runOnStopHooks(ctx))
 
 	if a.container != nil {
 		err = errors.Join(err, a.container.Close())
@@ -438,5 +477,22 @@ func (a *App) AddStaticFiles(endpoint, filePath string) {
 //	    return nil
 //	})
 func (a *App) OnStart(hook func(ctx *Context) error) {
+	if hook == nil {
+		a.Logger().Error("OnStart hook cannot be nil")
+		return
+	}
+
 	a.onStartHooks = append(a.onStartHooks, hook)
+}
+
+// OnStop registers a shutdown hook that will be executed during graceful shutdown.
+// Hooks are executed in reverse registration order so that cleanup naturally mirrors setup.
+// Unlike OnStart, all OnStop hooks are attempted and their errors are joined together.
+func (a *App) OnStop(hook func(ctx *Context) error) {
+	if hook == nil {
+		a.Logger().Error("OnStop hook cannot be nil")
+		return
+	}
+
+	a.onStopHooks = append(a.onStopHooks, hook)
 }

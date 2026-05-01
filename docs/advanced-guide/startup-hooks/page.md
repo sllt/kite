@@ -1,6 +1,12 @@
-# Startup Hooks
+# Lifecycle Hooks and Background Workers
 
-Kite provides a way to run synchronous jobs when your application starts, before any servers begin handling requests. This is useful for tasks like seeding a database, warming up a cache, or performing other critical setup procedures.
+Kite provides lifecycle APIs for work that should be managed by the application runtime itself.
+
+This includes:
+
+- synchronous startup hooks before traffic starts
+- shutdown hooks during graceful shutdown
+- long-running background workers tied to the app lifecycle
 
 ## OnStart
 
@@ -57,3 +63,62 @@ func main() {
 
 This ensures that critical startup tasks are completed successfully before the application begins accepting traffic.
 
+## OnStop
+
+You can register shutdown hooks using `a.OnStop()`.
+
+- hooks run during graceful shutdown
+- hooks run in **reverse registration order**
+- all hooks are attempted, and Kite joins their errors
+
+### Example
+
+```go
+app.OnStop(func(ctx *kite.Context) error {
+    ctx.Logger.Info("flushing final state before shutdown")
+    return nil
+})
+```
+
+Use `OnStop` for:
+
+- flushing buffers
+- writing final checkpoints
+- unregistering external leases
+- closing app-level resources that should stop before the container is fully closed
+
+## App.Go
+
+`App.Go` registers a long-running background worker managed by Kite.
+
+```go
+app.Go("cache-warmer", func(ctx *kite.Context) error {
+    ticker := time.NewTicker(30 * time.Second)
+    defer ticker.Stop()
+
+    for {
+        select {
+        case <-ctx.Done():
+            return nil
+        case <-ticker.C:
+            ctx.Logger.Info("refreshing cache")
+        }
+    }
+})
+```
+
+### Behavior
+
+- workers start with the application runtime
+- the passed `*kite.Context` is canceled when shutdown begins
+- returning `nil` or `context.Canceled` is treated as graceful exit
+- returning any other error triggers application shutdown
+- panics are recovered and logged
+
+### Good use cases
+
+- cache refresh loops
+- outbox relays
+- pollers / watchers
+- heartbeat / lease renewals
+- long-running sync workers

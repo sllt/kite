@@ -95,6 +95,9 @@ const repositoryTemplate = `package repository
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"time"
 
 	"{{ .ProjectName }}/internal/model"
 )
@@ -119,23 +122,39 @@ type {{ .StructNameLowerFirst }}Repository struct {
 func (r *{{ .StructNameLowerFirst }}Repository) Get{{ .StructName }}(ctx context.Context, id string) (*model.{{ .StructName }}, error) {
 	var {{ .StructNameLowerFirst }} model.{{ .StructName }}
 	q := r.GetQuerier(ctx)
-	err := q.QueryRowContext(ctx,
-		"SELECT id, created_at, updated_at FROM {{ .StructNameSnakeCase }}s WHERE id = ?",
+	err := q.Select(ctx, &{{ .StructNameLowerFirst }},
+		"SELECT * FROM {{ .StructNameSnakeCase }}s WHERE id = ?",
 		id,
-	).Scan(&{{ .StructNameLowerFirst }}.Id, &{{ .StructNameLowerFirst }}.CreatedAt, &{{ .StructNameLowerFirst }}.UpdatedAt)
+	)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	return &{{ .StructNameLowerFirst }}, nil
 }
 
 func (r *{{ .StructNameLowerFirst }}Repository) Create{{ .StructName }}(ctx context.Context, {{ .StructNameLowerFirst }} *model.{{ .StructName }}) error {
+	now := time.Now()
+	{{ .StructNameLowerFirst }}.CreatedAt = now
+	{{ .StructNameLowerFirst }}.UpdatedAt = now
+
 	q := r.GetQuerier(ctx)
-	_, err := q.ExecContext(ctx,
+	result, err := q.ExecContext(ctx,
 		"INSERT INTO {{ .StructNameSnakeCase }}s (created_at, updated_at) VALUES (?, ?)",
 		{{ .StructNameLowerFirst }}.CreatedAt, {{ .StructNameLowerFirst }}.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+
+	id, err := result.LastInsertId()
+	if err == nil {
+		{{ .StructNameLowerFirst }}.Id = uint(id)
+	}
+
+	return nil
 }
 `
 
